@@ -1,6 +1,9 @@
 # The directory Mix will write compiled artifacts to.
 /_build/
 
+# Expert
+/.expert
+
 # If you run "mix test --cover", coverage assets end up here.
 /cover/
 
@@ -22,3 +25,7 @@ erl_crash.dump
 # Ignore package tarball (built via "mix hex.build").
 or_tools-*.tar
 
+# NIF build artifacts
+/priv/*.so
+/priv/*.dll
+/c_src/*.o

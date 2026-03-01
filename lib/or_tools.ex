@@ -1,18 +1,18 @@
 defmodule OrTools do
   @moduledoc """
-  Documentation for `OrTools`.
+  Elixir interface to Google OR-Tools using Fine NIFs.
   """
 
+  alias OrTools.NIF
+
   @doc """
-  Hello world.
+  Adds two integers together using the NIF implementation.
 
   ## Examples
 
-      iex> OrTools.hello()
-      :world
+      iex> OrTools.add(2, 3)
+      5
 
   """
-  def hello do
-    :world
-  end
+  defdelegate add(x, y), to: NIF
 end
