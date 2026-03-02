@@ -188,8 +188,8 @@ defmodule OrTools.CpSatTest do
       assert result.objective == 20.0
     end
 
-    test "sum of weighted tuples" do
-      terms = [{:x, 2}, {:y, 3}]
+    test "sum of weighted expressions" do
+      terms = [CpSat.expr(2 * :x), CpSat.expr(3 * :y)]
 
       result =
         CpSat.new()
@@ -202,6 +202,52 @@ defmodule OrTools.CpSatTest do
       assert result.status == :optimal
       assert 2 * result.values[:x] + 3 * result.values[:y] == 25
       assert result.objective == 25.0
+    end
+
+    test "sum of expr results" do
+      expressions = Enum.map([:a, :b, :c], fn v -> CpSat.expr(2 * v) end)
+
+      result =
+        CpSat.new()
+        |> CpSat.int_var(:a, 0..10)
+        |> CpSat.int_var(:b, 0..10)
+        |> CpSat.int_var(:c, 0..10)
+        |> CpSat.constrain(sum(expressions) <= 30)
+        |> CpSat.maximize(sum(expressions))
+        |> CpSat.solve!()
+
+      assert result.status == :optimal
+      assert result.objective == 30.0
+    end
+
+    test "sum of expr results can be added in maximize" do
+      reward = Enum.map([:x, :y], fn v -> CpSat.expr(2 * v) end)
+      penalty = [CpSat.expr(-1 * :z)]
+
+      result =
+        CpSat.new()
+        |> CpSat.int_var(:x, 0..10)
+        |> CpSat.int_var(:y, 0..10)
+        |> CpSat.int_var(:z, 0..10)
+        |> CpSat.maximize(sum(reward) + sum(penalty))
+        |> CpSat.solve!()
+
+      assert result == %{status: :optimal, values: %{x: 10, y: 10, z: 0}, objective: 40.0}
+    end
+
+    test "CpSat.sum/1 collects expr results at runtime" do
+      expressions = Enum.map([:x, :y, :z], fn v -> CpSat.expr(3 * v) end)
+      terms = CpSat.sum(expressions)
+
+      result =
+        CpSat.new()
+        |> CpSat.int_var(:x, 0..10)
+        |> CpSat.int_var(:y, 0..10)
+        |> CpSat.int_var(:z, 0..10)
+        |> CpSat.maximize(terms)
+        |> CpSat.solve!()
+
+      assert result == %{status: :optimal, values: %{x: 10, y: 10, z: 10}, objective: 90.0}
     end
   end
 
@@ -267,6 +313,30 @@ defmodule OrTools.CpSatTest do
         |> CpSat.solve!()
 
       assert result == %{status: :optimal, values: %{x: 3}, objective: 0.0}
+    end
+
+    test "runtime coefficient with abs" do
+      penalty = 100
+
+      result =
+        CpSat.new()
+        |> CpSat.int_var(:x, 0..10)
+        |> CpSat.maximize(:x - penalty * abs(:x - 5))
+        |> CpSat.solve!()
+
+      assert result == %{status: :optimal, values: %{x: 5}, objective: 5.0}
+    end
+
+    test "negated runtime coefficient with abs" do
+      penalty = 100
+
+      result =
+        CpSat.new()
+        |> CpSat.int_var(:x, 0..10)
+        |> CpSat.maximize(:x + -penalty * abs(:x - 5))
+        |> CpSat.solve!()
+
+      assert result == %{status: :optimal, values: %{x: 5}, objective: 5.0}
     end
   end
 

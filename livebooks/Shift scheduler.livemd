@@ -93,7 +93,7 @@ defmodule ShiftScheduler do
     end)
   end
 
-  @max_extra_hours Duration.new!(hour: 40)
+  @max_extra_hours Duration.new!(hour: 37, minute: 30)
 
   def max_hours(model, employees, shifts) do
     shifts_by_week = Enum.group_by(shifts, fn shift -> Date.beginning_of_week(shift.date) end)
@@ -112,17 +112,19 @@ defmodule ShiftScheduler do
   end
 
   def fill_shifts_reward(employees, shifts, least_common_multiple, contracted_weight) do
-    for employee <- employees, shift <- shifts do
-      case employee.contract do
-        nil ->
-          {var_name(employee, shift), 1}
+    CpSat.sum(
+      for employee <- employees, shift <- shifts do
+        case employee.contract do
+          nil ->
+            {var_name(employee, shift), 1}
 
-        contract ->
-          contract_minutes = Helpers.to_minutes(contract)
-          fair_weight = div(least_common_multiple, contract_minutes) * Helpers.to_minutes(shift.duration)
-          {var_name(employee, shift), 1 + fair_weight * contracted_weight}
+          contract ->
+            contract_minutes = Helpers.to_minutes(contract)
+            fair_weight = div(least_common_multiple, contract_minutes) * Helpers.to_minutes(shift.duration)
+            {var_name(employee, shift), 1 + fair_weight * contracted_weight}
+        end
       end
-    end
+    )
   end
 
   def spread_penalty(contracted, shifts, least_common_multiple, contracted_weight) do
@@ -138,11 +140,25 @@ defmodule ShiftScheduler do
 
       CpSat.expr(-penalty * abs(sum(worked) - contract_minutes))
     end
-    |> List.flatten()
+    |> CpSat.sum()
+  end
+
+  defp employee_hours(employee, shifts) do
+    CpSat.sum(Enum.map(shifts, fn shift ->
+      {var_name(employee, shift), Helpers.to_minutes(shift.duration)}
+    end))
+  end
+
+  def extras_fairness(extras, shifts) do
+    for a <- extras, b <- extras, a.id < b.id do
+      CpSat.expr(-1 * abs(sum(employee_hours(a, shifts)) - sum(employee_hours(b, shifts))))
+    end
+    |> CpSat.sum()
   end
 
   def fill_contracts(model, employees, shifts) do
     contracted = Enum.filter(employees, & &1.contract)
+    extras = Enum.reject(employees, & &1.contract)
 
     least_common_multiple =
       case contracted do
@@ -159,8 +175,9 @@ defmodule ShiftScheduler do
 
     reward = fill_shifts_reward(employees, shifts, least_common_multiple, contracted_weight)
     penalty = spread_penalty(contracted, shifts, least_common_multiple, contracted_weight)
+    fairness = extras_fairness(extras, shifts)
 
-    CpSat.maximize(model, sum(reward ++ penalty))
+    CpSat.maximize(model, reward + penalty + fairness)
   end
 
   def print_result(result, employees, shifts) do

@@ -136,6 +136,25 @@ defmodule OrTools.CpSat do
     quote_collect_terms(expression)
   end
 
+  @doc """
+  Converts a list of variable names, `{name, coeff}` tuples, or expr results
+  into a flat term list at runtime.
+
+  ## Examples
+
+      terms = CpSat.sum(for v <- vars, do: CpSat.expr(2 * v))
+      CpSat.maximize(model, terms)
+  """
+  def sum(list) when is_list(list) do
+    list
+    |> List.flatten()
+    |> Enum.map(fn
+      {:__abs__, _inner, _coeff} = abs_term -> abs_term
+      {name, coeff} when is_atom(name) and is_integer(coeff) -> {name, coeff}
+      name when is_atom(name) -> {name, 1}
+    end)
+  end
+
   @doc "Sets the objective to maximize. Does not validate variable names."
   defmacro maximize(model, expr) do
     terms_ast = quote_collect_terms(expr)
@@ -425,13 +444,14 @@ defmodule OrTools.CpSat do
     quote do: [{:__abs__, unquote(inner_ast), 1}]
   end
 
-  # sum(list) — accepts a list of atoms, {atom, coeff} tuples, or {:__abs__, terms, coeff} markers
+  # sum(list) — accepts a list of atoms, {atom, coeff} tuples, expr results, or {:__abs__, terms, coeff} markers
   defp quote_collect_terms({:sum, _, [arg]}) do
     quote do
-      Enum.map(unquote(arg), fn
-        {:__abs__, _inner, _coeff} = abs_term -> abs_term
-        {name, coeff} when is_atom(name) and is_integer(coeff) -> {name, coeff}
-        name when is_atom(name) -> {name, 1}
+      Enum.flat_map(unquote(arg), fn
+        {:__abs__, _inner, _coeff} = abs_term -> [abs_term]
+        {name, coeff} when is_atom(name) and is_integer(coeff) -> [{name, coeff}]
+        name when is_atom(name) -> [{name, 1}]
+        list when is_list(list) -> list
       end)
     end
   end
@@ -533,12 +553,13 @@ defmodule OrTools.CpSat do
     [{:__const__, int}]
   end
 
-  # Runtime expression — could be a variable name (atom) or a constant (integer)
+  # Runtime expression — could be a variable name (atom), a constant (integer), or a term list
   defp quote_collect_terms(other) do
     quote do
       case unquote(other) do
         val when is_atom(val) -> [{val, 1}]
         val when is_integer(val) -> [{:__const__, val}]
+        val when is_list(val) -> val
       end
     end
   end
