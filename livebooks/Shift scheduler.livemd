@@ -17,9 +17,8 @@ defmodule Helpers do
     Enum.with_index(items, fn item, i -> Map.put(item, :id, i + offset) end)
   end
 
-  def build_shifts(%Date{} = start_date, %Date{} = end_date, shift_types) do
-    for date <- Date.range(start_date, end_date),
-        shift_type <- shift_types do
+  def build_shifts(dates, shift_types) when is_list(dates) do
+    for date <- dates, shift_type <- shift_types do
       start_time = DateTime.new!(date, shift_type.start_time)
       end_time = DateTime.shift(start_time, shift_type.duration)
 
@@ -33,6 +32,12 @@ defmodule Helpers do
     end
   end
 
+  def weekdays(%Date{} = start_monday, weeks) do
+    for week <- 0..(weeks - 1), day <- 0..4 do
+      Date.add(start_monday, week * 7 + day)
+    end
+  end
+
   def to_minutes(%Duration{} = d), do: d.hour * 60 + d.minute
 
   def format_minutes(minutes) do
@@ -42,29 +47,6 @@ defmodule Helpers do
   end
 end
 
-employees =
-  [
-    %{name: "Alice", contract: Duration.new!(hour: 40)},
-    %{name: "Bob", contract: Duration.new!(hour: 40)},
-    %{name: "Charlie", contract: Duration.new!(hour: 20)},
-    %{name: "Dana", contract: Duration.new!(hour: 20)},
-    %{name: "Eve", contract: nil}
-  ]
-  |> Helpers.with_ids()
-
-shifts =
-  Helpers.build_shifts(~D[2026-03-02], ~D[2026-03-06], [
-    %{name: "Early", start_time: ~T[08:00:00], duration: Duration.new!(hour: 8)},
-    %{name: "Early", start_time: ~T[08:00:00], duration: Duration.new!(hour: 8)},
-    %{name: "Late", start_time: ~T[10:00:00], duration: Duration.new!(hour: 8)},
-    # %{name: "Late", start_time: ~T[10:00:00], duration: Duration.new!(hour: 8)},
-  ])
-  |> Helpers.with_ids()
-```
-
-## Solve
-
-```elixir
 defmodule ShiftScheduler do
   def var_name(employee, shift), do: :"e#{employee.id}_s#{shift.id}"
 
@@ -96,15 +78,19 @@ defmodule ShiftScheduler do
 
   @max_extra_hours Duration.new!(hour: 40)
 
-  def max_hours(model, employees, shifts) do
+  def max_hours_per_week(model, employees, shifts) do
+    weeks = Enum.group_by(shifts, fn shift -> Date.beginning_of_week(shift.date) end)
+
     Enum.reduce(employees, model, fn employee, model ->
       max = employee.contract || @max_extra_hours
 
-      minutes = Enum.map(shifts, fn shift ->
-        {var_name(employee, shift), Helpers.to_minutes(shift.duration)}
-      end)
+      Enum.reduce(weeks, model, fn {_week, week_shifts}, model ->
+        minutes = Enum.map(week_shifts, fn shift ->
+          {var_name(employee, shift), Helpers.to_minutes(shift.duration)}
+        end)
 
-      CpSat.constrain(model, sum(minutes) <= Helpers.to_minutes(max))
+        CpSat.constrain(model, sum(minutes) <= Helpers.to_minutes(max))
+      end)
     end)
   end
 
@@ -194,15 +180,37 @@ defmodule ShiftScheduler do
   end
 end
 
-model =
-  CpSat.new()
-  |> ShiftScheduler.init_variables(employees, shifts)
-  |> ShiftScheduler.one_employee_per_shift(employees, shifts)
-  |> ShiftScheduler.one_shift_per_day(employees, shifts)
-  |> ShiftScheduler.max_hours(employees, shifts)
-  |> ShiftScheduler.fill_contracts(employees, shifts)
+```
 
-result = CpSat.solve!(model)
+## Solve
 
-ShiftScheduler.print_result(result, employees, shifts)
+```elixir
+employees =
+  [
+    %{name: "Alice", contract: Duration.new!(hour: 40)},
+    %{name: "Bob", contract: Duration.new!(hour: 40)},
+    %{name: "Charlie", contract: Duration.new!(hour: 20)},
+    %{name: "Dana", contract: Duration.new!(hour: 20)},
+    %{name: "Eve", contract: nil}
+  ]
+  |> Helpers.with_ids()
+
+shifts =
+  ~D[2026-03-02]
+  |> Helpers.weekdays(2)
+  |> Helpers.build_shifts([
+    %{name: "Early", start_time: ~T[08:00:00], duration: Duration.new!(hour: 8)},
+    %{name: "Early", start_time: ~T[08:00:00], duration: Duration.new!(hour: 8)},
+    %{name: "Late", start_time: ~T[10:00:00], duration: Duration.new!(hour: 8)}
+  ])
+  |> Helpers.with_ids()
+
+CpSat.new()
+|> ShiftScheduler.init_variables(employees, shifts)
+|> ShiftScheduler.one_employee_per_shift(employees, shifts)
+|> ShiftScheduler.one_shift_per_day(employees, shifts)
+|> ShiftScheduler.max_hours_per_week(employees, shifts)
+|> ShiftScheduler.fill_contracts(employees, shifts)
+|> CpSat.solve!()
+|> ShiftScheduler.print_result(employees, shifts)
 ```
