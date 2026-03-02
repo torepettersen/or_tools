@@ -57,6 +57,7 @@ shifts =
     %{name: "Early", start_time: ~T[08:00:00], duration: Duration.new!(hour: 8)},
     %{name: "Early", start_time: ~T[08:00:00], duration: Duration.new!(hour: 8)},
     %{name: "Late", start_time: ~T[10:00:00], duration: Duration.new!(hour: 8)},
+    # %{name: "Late", start_time: ~T[10:00:00], duration: Duration.new!(hour: 8)},
   ])
   |> Helpers.with_ids()
 ```
@@ -78,7 +79,7 @@ defmodule ShiftScheduler do
   def one_employee_per_shift(model, employees, shifts) do
     Enum.reduce(shifts, model, fn shift, model ->
       assignments = Enum.map(employees, fn employee -> var_name(employee, shift) end)
-      CpSat.constrain(model, sum(assignments) == 1)
+      CpSat.constrain(model, sum(assignments) <= 1)
     end)
   end
 
@@ -93,38 +94,53 @@ defmodule ShiftScheduler do
     end)
   end
 
-  def respect_contracts(model, employees, shifts) do
+  @max_extra_hours Duration.new!(hour: 40)
+
+  def max_hours(model, employees, shifts) do
+    Enum.reduce(employees, model, fn employee, model ->
+      max = employee.contract || @max_extra_hours
+
+      minutes = Enum.map(shifts, fn shift ->
+        {var_name(employee, shift), Helpers.to_minutes(shift.duration)}
+      end)
+
+      CpSat.constrain(model, sum(minutes) <= Helpers.to_minutes(max))
+    end)
+  end
+
+  def fill_contracts(model, employees, shifts) do
     contracted = Enum.filter(employees, & &1.contract)
 
     least_common_multiple =
-      contracted
-      |> Enum.map(fn employee -> Helpers.to_minutes(employee.contract) end)
-      |> Enum.reduce(fn a, b -> div(a * b, Integer.gcd(a, b)) end)
+      case contracted do
+        [] ->
+          1
 
-    model =
-      Enum.reduce(employees, model, fn employee, model ->
-        case employee.contract do
-          nil ->
-            model
-
-          contract ->
-            minutes = Enum.map(shifts, fn shift ->
-              {var_name(employee, shift), Helpers.to_minutes(shift.duration)}
-            end)
-
-            CpSat.constrain(model, sum(minutes) <= Helpers.to_minutes(contract))
-        end
-      end)
-
-    # Maximize with fairness: weight inversely by contract so all fill proportionally
-    fair_terms =
-      for employee <- contracted, shift <- shifts do
-        contract_minutes = Helpers.to_minutes(employee.contract)
-        weight = div(least_common_multiple, contract_minutes) * Helpers.to_minutes(shift.duration)
-        {var_name(employee, shift), weight}
+        _ ->
+          contracted
+          |> Enum.map(fn employee -> Helpers.to_minutes(employee.contract) end)
+          |> Enum.reduce(fn a, b -> div(a * b, Integer.gcd(a, b)) end)
       end
 
-    CpSat.maximize(model, sum(fair_terms))
+    # Contracted employees get a high weight inversely proportional to their
+    # contract, so the solver fills all contracts at the same rate.
+    # Extras get a weight of 1 so they fill remaining shifts without competing.
+    contracted_weight = length(shifts) + 1
+
+    objective_terms =
+      for employee <- employees, shift <- shifts do
+        case employee.contract do
+          nil ->
+            {var_name(employee, shift), 1}
+
+          contract ->
+            contract_minutes = Helpers.to_minutes(contract)
+            fair_weight = div(least_common_multiple, contract_minutes) * Helpers.to_minutes(shift.duration)
+            {var_name(employee, shift), 1 + fair_weight * contracted_weight}
+        end
+      end
+
+    CpSat.maximize(model, sum(objective_terms))
   end
 
   def print_result(result, employees, shifts) do
@@ -157,10 +173,24 @@ defmodule ShiftScheduler do
         [employee.name | day_cells ++ [Helpers.format_minutes(total_minutes), contract]]
       end)
 
-    [header, separator | rows]
-    |> Enum.map(fn cols -> "| " <> Enum.join(cols, " | ") <> " |" end)
-    |> Enum.join("\n")
-    |> Kino.Markdown.new()
+    unassigned =
+      for shift <- shifts,
+          not Enum.any?(employees, fn e -> result.values[var_name(e, shift)] == 1 end) do
+        "- #{Calendar.strftime(shift.start_time, "%A %d %H:%M")} #{shift.name}"
+      end
+
+    table =
+      [header, separator | rows]
+      |> Enum.map(fn cols -> "| " <> Enum.join(cols, " | ") <> " |" end)
+      |> Enum.join("\n")
+
+    markdown =
+      case unassigned do
+        [] -> table
+        _ -> table <> "\n\n**Unassigned shifts:**\n\n" <> Enum.join(unassigned, "\n")
+      end
+
+    Kino.Markdown.new(markdown)
   end
 end
 
@@ -169,7 +199,8 @@ model =
   |> ShiftScheduler.init_variables(employees, shifts)
   |> ShiftScheduler.one_employee_per_shift(employees, shifts)
   |> ShiftScheduler.one_shift_per_day(employees, shifts)
-  |> ShiftScheduler.respect_contracts(employees, shifts)
+  |> ShiftScheduler.max_hours(employees, shifts)
+  |> ShiftScheduler.fill_contracts(employees, shifts)
 
 result = CpSat.solve!(model)
 
