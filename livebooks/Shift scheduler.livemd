@@ -1,0 +1,134 @@
+# Shift scheduler
+
+```elixir
+Mix.install([
+  {:or_tools, path: "."},
+  {:kino, "~> 0.18"}
+])
+```
+
+## Section
+
+```elixir
+defmodule Helpers do
+  def with_ids(items, offset \\ 1) do
+    Enum.with_index(items, fn item, i -> Map.put(item, :id, i + offset) end)
+  end
+
+  def build_shifts(%Date{} = start_date, %Date{} = end_date, shift_types) do
+    for date <- Date.range(start_date, end_date),
+        shift_type <- shift_types do
+      start_time = DateTime.new!(date, shift_type.start_time)
+      end_time = DateTime.shift(start_time, shift_type.duration)
+
+      %{
+        name: shift_type.name,
+        start_time: start_time,
+        end_time: end_time,
+        date: date,
+        duration: shift_type.duration
+      }
+    end
+  end
+end
+
+employees = [
+  %{name: "Alice"},
+  %{name: "Bob"},
+  %{name: "Charlie"},
+  %{name: "Dana"}
+]
+|> Helpers.with_ids()
+
+shifts =
+  Helpers.build_shifts(~D[2026-03-02], ~D[2026-03-06], [
+    %{name: "Early", start_time: ~T[08:00:00], duration: Duration.new!(hour: 8)},
+    %{name: "Late", start_time: ~T[10:00:00], duration: Duration.new!(hour: 8)}
+  ])
+  |> Helpers.with_ids()
+```
+
+```elixir
+defmodule ShiftScheduler do
+  def init_variables(model, employees, shifts) do
+    Enum.reduce(employees, model, fn employee, model ->
+      Enum.reduce(shifts, model, fn shift, model ->
+        CpSat.bool_var(model, var_name(employee, shift))
+      end)
+    end)
+  end
+
+  def one_employee_per_shift(model, employees, shifts) do
+    Enum.reduce(shifts, model, fn shift, model ->
+      assignments = Enum.map(employees, fn employee -> var_name(employee, shift) end)
+      CpSat.constrain(model, sum(assignments) == 1)
+    end)
+  end
+
+  def one_shift_per_day(model, employees, shifts) do
+    Enum.reduce(employees, model, fn employee, model ->
+      shifts
+      |> Enum.group_by(& &1.date)
+      |> Enum.reduce(model, fn {_date, shifts}, model ->
+        assignments = Enum.map(shifts, fn shift -> var_name(employee, shift) end)
+        CpSat.constrain(model, sum(assignments) <= 1)
+      end)
+    end)
+  end
+
+  def balance_shifts(model, employees, shifts) do
+    num_shifts = length(shifts)
+    num_employees = length(employees)
+    min_possible = div(num_shifts, num_employees)
+    max_possible = min_possible + 1
+  
+    Enum.reduce(employees, model, fn employee, model ->
+      assignments = Enum.map(shifts, fn shift -> var_name(employee, shift) end)
+  
+      model
+      |> CpSat.constrain(sum(assignments) >= min_possible)
+      |> CpSat.constrain(sum(assignments) <= max_possible)
+    end)
+  end
+
+  def var_name(employee, shift) do
+    :"e#{employee.id}_s#{shift.id}"
+  end
+
+  def print_result(result, employees, shifts) do
+    assignments =
+      for employee <- employees,
+          shift <- shifts,
+          result.values[var_name(employee, shift)] == 1,
+          into: %{} do
+        {{employee.id, shift.date}, shift.name}
+      end
+    
+    dates = shifts |> Enum.map(& &1.date) |> Enum.uniq() |> Enum.sort(Date)
+    
+    header = ["" | Enum.map(dates, &Calendar.strftime(&1, "%A %d"))]
+    separator = Enum.map(header, fn _ -> "---" end)
+    
+    rows =
+      Enum.map(employees, fn employee ->
+        [employee.name | Enum.map(dates, fn date -> assignments[{employee.id, date}] || "-" end)]
+      end)
+    
+    [header, separator | rows]
+    |> Enum.map(fn cols -> "| " <> Enum.join(cols, " | ") <> " |" end)
+    |> Enum.join("\n")
+    |> Kino.Markdown.new()
+  end
+end
+
+model = 
+  CpSat.new()
+  |> ShiftScheduler.init_variables(employees, shifts)
+  |> ShiftScheduler.one_employee_per_shift(employees,shifts)
+  |> ShiftScheduler.one_shift_per_day(employees, shifts)
+  |> ShiftScheduler.balance_shifts(employees, shifts)
+
+result = CpSat.solve!(model)
+
+ShiftScheduler.print_result(result, employees, shifts)
+```
