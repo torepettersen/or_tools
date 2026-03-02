@@ -56,10 +56,13 @@ defmodule OrTools.CpSat do
       CpSat.constrain(model, 2 * :x + 7 * :y <= 50)
   """
   defmacro constrain(model, expr) do
-    {terms, op, rhs} = parse_constraint(expr)
+    {lhs_ast, op, rhs_ast} = parse_constraint_ast(expr)
 
     quote do
-      OrTools.CpSat.add_constraint(unquote(model), unquote(terms), unquote(op), unquote(rhs))
+      {terms, op, rhs} =
+        OrTools.CpSat.__build_constraint__(unquote(lhs_ast), unquote(rhs_ast), unquote(op))
+
+      OrTools.CpSat.add_constraint(unquote(model), terms, op, rhs)
     end
   end
 
@@ -73,10 +76,13 @@ defmodule OrTools.CpSat do
       CpSat.constrain!(model, 2 * :x + 7 * :y <= 50)
   """
   defmacro constrain!(model, expr) do
-    {terms, op, rhs} = parse_constraint(expr)
+    {lhs_ast, op, rhs_ast} = parse_constraint_ast(expr)
 
     quote do
-      OrTools.CpSat.add_constraint!(unquote(model), unquote(terms), unquote(op), unquote(rhs))
+      {terms, op, rhs} =
+        OrTools.CpSat.__build_constraint__(unquote(lhs_ast), unquote(rhs_ast), unquote(op))
+
+      OrTools.CpSat.add_constraint!(unquote(model), terms, op, rhs)
     end
   end
 
@@ -112,37 +118,41 @@ defmodule OrTools.CpSat do
 
   @doc "Sets the objective to maximize. Does not validate variable names."
   defmacro maximize(model, expr) do
-    terms = parse_linear_expr(expr)
+    terms_ast = quote_collect_terms(expr)
 
     quote do
-      OrTools.CpSat.set_objective(unquote(model), :maximize, unquote(terms))
+      terms = OrTools.CpSat.__build_linear_expr__(unquote(terms_ast))
+      OrTools.CpSat.set_objective(unquote(model), :maximize, terms)
     end
   end
 
   @doc "Sets the objective to maximize with immediate validation."
   defmacro maximize!(model, expr) do
-    terms = parse_linear_expr(expr)
+    terms_ast = quote_collect_terms(expr)
 
     quote do
-      OrTools.CpSat.set_objective!(unquote(model), :maximize, unquote(terms))
+      terms = OrTools.CpSat.__build_linear_expr__(unquote(terms_ast))
+      OrTools.CpSat.set_objective!(unquote(model), :maximize, terms)
     end
   end
 
   @doc "Sets the objective to minimize. Does not validate variable names."
   defmacro minimize(model, expr) do
-    terms = parse_linear_expr(expr)
+    terms_ast = quote_collect_terms(expr)
 
     quote do
-      OrTools.CpSat.set_objective(unquote(model), :minimize, unquote(terms))
+      terms = OrTools.CpSat.__build_linear_expr__(unquote(terms_ast))
+      OrTools.CpSat.set_objective(unquote(model), :minimize, terms)
     end
   end
 
   @doc "Sets the objective to minimize with immediate validation."
   defmacro minimize!(model, expr) do
-    terms = parse_linear_expr(expr)
+    terms_ast = quote_collect_terms(expr)
 
     quote do
-      OrTools.CpSat.set_objective!(unquote(model), :minimize, unquote(terms))
+      terms = OrTools.CpSat.__build_linear_expr__(unquote(terms_ast))
+      OrTools.CpSat.set_objective!(unquote(model), :minimize, terms)
     end
   end
 
@@ -266,12 +276,10 @@ defmodule OrTools.CpSat do
     end
   end
 
-  # --- Macro helpers (compile-time AST parsing) ---
+  # --- Runtime helpers for expression normalization ---
 
-  defp parse_constraint({op, _, [lhs, rhs]}) when op in [:<=, :>=, :==, :!=, :<, :>] do
-    lhs_terms = collect_terms(lhs)
-    rhs_terms = collect_terms(rhs)
-
+  @doc false
+  def __build_constraint__(lhs_terms, rhs_terms, op) do
     {lhs_vars, lhs_const} = split_terms(lhs_terms)
     {rhs_vars, rhs_const} = split_terms(rhs_terms)
 
@@ -281,42 +289,10 @@ defmodule OrTools.CpSat do
     {final_vars, op, final_rhs}
   end
 
-  defp parse_linear_expr(expr) do
-    terms = collect_terms(expr)
+  @doc false
+  def __build_linear_expr__(terms) do
     {vars, _const} = split_terms(terms)
     vars
-  end
-
-  defp collect_terms({:+, _, [left, right]}) do
-    collect_terms(left) ++ collect_terms(right)
-  end
-
-  defp collect_terms({:-, _, [left, right]}) do
-    collect_terms(left) ++ negate_collected(collect_terms(right))
-  end
-
-  defp collect_terms({:-, _, [operand]}) do
-    negate_collected(collect_terms(operand))
-  end
-
-  defp collect_terms({:*, _, [coeff, var]}) when is_atom(var) and is_integer(coeff) do
-    [{var, coeff}]
-  end
-
-  defp collect_terms({:*, _, [var, coeff]}) when is_atom(var) and is_integer(coeff) do
-    [{var, coeff}]
-  end
-
-  defp collect_terms(var) when is_atom(var) do
-    [{var, 1}]
-  end
-
-  defp collect_terms(int) when is_integer(int) do
-    [{:__const__, int}]
-  end
-
-  defp negate_collected(terms) do
-    Enum.map(terms, fn {var, coeff} -> {var, -coeff} end)
   end
 
   defp split_terms(terms) do
@@ -334,5 +310,86 @@ defmodule OrTools.CpSat do
     |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
     |> Enum.map(fn {var, coeffs} -> {var, Enum.sum(coeffs)} end)
     |> Enum.reject(fn {_, coeff} -> coeff == 0 end)
+  end
+
+  # --- Macro helpers (compile-time AST → runtime code) ---
+
+  defp parse_constraint_ast({op, _, [lhs, rhs]}) when op in [:<=, :>=, :==, :!=, :<, :>] do
+    {quote_collect_terms(lhs), op, quote_collect_terms(rhs)}
+  end
+
+  # Generates quoted code that evaluates to a list of {atom | :__const__, integer} terms at runtime.
+  defp quote_collect_terms({:+, _, [left, right]}) do
+    l = quote_collect_terms(left)
+    r = quote_collect_terms(right)
+    quote do: unquote(l) ++ unquote(r)
+  end
+
+  defp quote_collect_terms({:-, _, [left, right]}) do
+    l = quote_collect_terms(left)
+    r = quote_collect_terms(right)
+    quote do: unquote(l) ++ Enum.map(unquote(r), fn {v, c} -> {v, -c} end)
+  end
+
+  defp quote_collect_terms({:-, _, [operand]}) do
+    o = quote_collect_terms(operand)
+    quote do: Enum.map(unquote(o), fn {v, c} -> {v, -c} end)
+  end
+
+  # coeff * var where both are literals
+  defp quote_collect_terms({:*, _, [coeff, var]}) when is_integer(coeff) and is_atom(var) do
+    [{var, coeff}]
+  end
+
+  # var * coeff where both are literals
+  defp quote_collect_terms({:*, _, [var, coeff]}) when is_atom(var) and is_integer(coeff) do
+    [{var, coeff}]
+  end
+
+  # coeff * expr or expr * coeff — at least one side is a runtime expression
+  defp quote_collect_terms({:*, _, [left, right]}) do
+    cond do
+      is_integer(left) ->
+        # left is a literal integer, right is a runtime expression (variable name)
+        quote do: [{unquote(right), unquote(left)}]
+
+      is_integer(right) ->
+        # right is a literal integer, left is a runtime expression (variable name)
+        quote do: [{unquote(left), unquote(right)}]
+
+      is_atom(left) ->
+        # left is a literal atom, right is a runtime expression (coefficient)
+        quote do: [{unquote(left), unquote(right)}]
+
+      is_atom(right) ->
+        # right is a literal atom, left is a runtime expression (coefficient)
+        quote do: [{unquote(right), unquote(left)}]
+
+      true ->
+        # Both sides are runtime expressions
+        quote do
+          l_val = unquote(left)
+          r_val = unquote(right)
+
+          if is_atom(l_val),
+            do: [{l_val, r_val}],
+            else: [{r_val, l_val}]
+        end
+    end
+  end
+
+  # Literal atom (e.g. :x)
+  defp quote_collect_terms(var) when is_atom(var) do
+    [{var, 1}]
+  end
+
+  # Literal integer (e.g. 50)
+  defp quote_collect_terms(int) when is_integer(int) do
+    [{:__const__, int}]
+  end
+
+  # Runtime variable reference (e.g. `x` where x = :x)
+  defp quote_collect_terms(other) do
+    quote do: [{unquote(other), 1}]
   end
 end
