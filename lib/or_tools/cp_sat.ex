@@ -121,13 +121,27 @@ defmodule OrTools.CpSat do
     all_different(model, var_names)
   end
 
+  @doc """
+  Returns the raw term list for an expression, without a model.
+
+  Useful for building expressions in variables before passing to
+  `maximize`, `minimize`, or `constrain`.
+
+  ## Examples
+
+      terms = CpSat.expr(2 * :x + 3 * :y)
+      CpSat.maximize(model, sum(terms))
+  """
+  defmacro expr(expression) do
+    quote_collect_terms(expression)
+  end
+
   @doc "Sets the objective to maximize. Does not validate variable names."
   defmacro maximize(model, expr) do
     terms_ast = quote_collect_terms(expr)
 
     quote do
-      terms = OrTools.CpSat.__build_linear_expr__(unquote(terms_ast))
-      OrTools.CpSat.set_objective(unquote(model), :maximize, terms)
+      OrTools.CpSat.__build_objective__(unquote(model), :maximize, unquote(terms_ast))
     end
   end
 
@@ -136,8 +150,9 @@ defmodule OrTools.CpSat do
     terms_ast = quote_collect_terms(expr)
 
     quote do
-      terms = OrTools.CpSat.__build_linear_expr__(unquote(terms_ast))
-      OrTools.CpSat.set_objective!(unquote(model), :maximize, terms)
+      model = OrTools.CpSat.__build_objective__(unquote(model), :maximize, unquote(terms_ast))
+      OrTools.CpSat.__validate_objective__!(model)
+      model
     end
   end
 
@@ -146,8 +161,7 @@ defmodule OrTools.CpSat do
     terms_ast = quote_collect_terms(expr)
 
     quote do
-      terms = OrTools.CpSat.__build_linear_expr__(unquote(terms_ast))
-      OrTools.CpSat.set_objective(unquote(model), :minimize, terms)
+      OrTools.CpSat.__build_objective__(unquote(model), :minimize, unquote(terms_ast))
     end
   end
 
@@ -156,8 +170,9 @@ defmodule OrTools.CpSat do
     terms_ast = quote_collect_terms(expr)
 
     quote do
-      terms = OrTools.CpSat.__build_linear_expr__(unquote(terms_ast))
-      OrTools.CpSat.set_objective!(unquote(model), :minimize, terms)
+      model = OrTools.CpSat.__build_objective__(unquote(model), :minimize, unquote(terms_ast))
+      OrTools.CpSat.__validate_objective__!(model)
+      model
     end
   end
 
@@ -172,6 +187,57 @@ defmodule OrTools.CpSat do
     set_objective(model, sense, terms)
   end
 
+  @doc false
+  def __validate_objective__!(%__MODULE__{} = model) do
+    case model.objective do
+      {_sense, terms} -> validate_terms!(model, terms)
+      nil -> :ok
+    end
+  end
+
+  @doc false
+  def __negate_raw_terms__(terms) do
+    Enum.map(terms, fn
+      {:__abs__, inner, coeff} -> {:__abs__, inner, -coeff}
+      {v, c} -> {v, -c}
+    end)
+  end
+
+  @doc false
+  def __build_objective__(%__MODULE__{} = model, sense, raw_terms) do
+    {model, flat_terms} = flatten_abs_terms(model, raw_terms, sense)
+    {vars, _const} = split_terms(flat_terms)
+    set_objective(model, sense, vars)
+  end
+
+  defp flatten_abs_terms(model, terms, _sense) do
+    var_bounds = Map.new(model.vars, fn {name, lb, ub} -> {name, {lb, ub}} end)
+
+    Enum.reduce(terms, {model, []}, fn
+      {:__abs__, inner_terms, coeff}, {model, acc} ->
+        abs_name = :"__abs_#{:erlang.unique_integer([:positive])}"
+        {inner_vars, inner_const} = split_terms(inner_terms)
+
+        max_bound =
+          Enum.sum_by(inner_vars, fn {name, c} ->
+            {lb, ub} = Map.get(var_bounds, name, {0, 0})
+            max(abs(lb * c), abs(ub * c))
+          end) + abs(inner_const)
+
+        model = int_var(model, abs_name, 0, max_bound)
+
+        model = %{
+          model
+          | constraints: model.constraints ++ [{:abs_eq, abs_name, inner_vars, inner_const}]
+        }
+
+        {model, [{abs_name, coeff} | acc]}
+
+      term, {model, acc} ->
+        {model, [term | acc]}
+    end)
+  end
+
   @doc """
   Validates and solves the model. Returns `{:ok, result}` or `{:error, reason}`.
 
@@ -183,7 +249,12 @@ defmodule OrTools.CpSat do
         {status, values, objective} =
           OrTools.NIF.solve(model.vars, model.constraints, model.objective)
 
-        {:ok, %{status: status, values: values, objective: objective}}
+        visible_values =
+          Map.reject(values, fn {name, _} ->
+            name |> Atom.to_string() |> String.starts_with?("__abs_")
+          end)
+
+        {:ok, %{status: status, values: visible_values, objective: objective}}
 
       {:error, _} = error ->
         error
@@ -233,6 +304,13 @@ defmodule OrTools.CpSat do
 
   defp validate_constraint({:all_different, var_names}, declared) do
     check_var_names(var_names, declared)
+  end
+
+  defp validate_constraint({:abs_eq, target, terms, _const}, declared) do
+    with :ok <- check_var_names([target], declared),
+         :ok <- check_terms(terms, declared) do
+      :ok
+    end
   end
 
   defp validate_objective(nil, _declared), do: :ok
@@ -333,22 +411,74 @@ defmodule OrTools.CpSat do
   defp quote_collect_terms({:-, _, [left, right]}) do
     l = quote_collect_terms(left)
     r = quote_collect_terms(right)
-    quote do: unquote(l) ++ Enum.map(unquote(r), fn {v, c} -> {v, -c} end)
+    quote do: unquote(l) ++ OrTools.CpSat.__negate_raw_terms__(unquote(r))
   end
 
   defp quote_collect_terms({:-, _, [operand]}) do
     o = quote_collect_terms(operand)
-    quote do: Enum.map(unquote(o), fn {v, c} -> {v, -c} end)
+    quote do: OrTools.CpSat.__negate_raw_terms__(unquote(o))
   end
 
-  # sum(list) — accepts either a list of atoms (coeff 1 each) or {atom, coeff} tuples
+  # abs(expr) — emits a marker tuple that __build_objective__ will linearize
+  defp quote_collect_terms({:abs, _, [inner]}) do
+    inner_ast = quote_collect_terms(inner)
+    quote do: [{:__abs__, unquote(inner_ast), 1}]
+  end
+
+  # sum(list) — accepts a list of atoms, {atom, coeff} tuples, or {:__abs__, terms, coeff} markers
   defp quote_collect_terms({:sum, _, [arg]}) do
     quote do
       Enum.map(unquote(arg), fn
+        {:__abs__, _inner, _coeff} = abs_term -> abs_term
         {name, coeff} when is_atom(name) and is_integer(coeff) -> {name, coeff}
         name when is_atom(name) -> {name, 1}
       end)
     end
+  end
+
+  # coeff * sum(list) or sum(list) * coeff — scale all terms
+  defp quote_collect_terms({:*, _, [coeff, {:sum, _, _} = sum_expr]}) when is_integer(coeff) do
+    sum_ast = quote_collect_terms(sum_expr)
+
+    quote do
+      Enum.map(unquote(sum_ast), fn
+        {:__abs__, inner, c} -> {:__abs__, inner, c * unquote(coeff)}
+        {name, c} -> {name, c * unquote(coeff)}
+      end)
+    end
+  end
+
+  defp quote_collect_terms({:*, _, [{:sum, _, _} = sum_expr, coeff]}) when is_integer(coeff) do
+    sum_ast = quote_collect_terms(sum_expr)
+
+    quote do
+      Enum.map(unquote(sum_ast), fn
+        {:__abs__, inner, c} -> {:__abs__, inner, c * unquote(coeff)}
+        {name, c} -> {name, c * unquote(coeff)}
+      end)
+    end
+  end
+
+  # coeff * abs(expr) — scale the abs marker's coefficient
+  defp quote_collect_terms({:*, _, [coeff, {:abs, _, [inner]}]}) when is_integer(coeff) do
+    inner_ast = quote_collect_terms(inner)
+    quote do: [{:__abs__, unquote(inner_ast), unquote(coeff)}]
+  end
+
+  defp quote_collect_terms({:*, _, [{:abs, _, [inner]}, coeff]}) when is_integer(coeff) do
+    inner_ast = quote_collect_terms(inner)
+    quote do: [{:__abs__, unquote(inner_ast), unquote(coeff)}]
+  end
+
+  # runtime_coeff * abs(expr) — coeff is a runtime expression
+  defp quote_collect_terms({:*, _, [coeff, {:abs, _, [inner]}]}) do
+    inner_ast = quote_collect_terms(inner)
+    quote do: [{:__abs__, unquote(inner_ast), unquote(coeff)}]
+  end
+
+  defp quote_collect_terms({:*, _, [{:abs, _, [inner]}, coeff]}) do
+    inner_ast = quote_collect_terms(inner)
+    quote do: [{:__abs__, unquote(inner_ast), unquote(coeff)}]
   end
 
   # coeff * var where both are literals

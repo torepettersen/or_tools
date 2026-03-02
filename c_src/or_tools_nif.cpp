@@ -111,6 +111,22 @@ std::tuple<fine::Atom, std::map<fine::Atom, int64_t>, double> solve(
         }
         builder.AddAllDifferent(int_vars);
       }
+    } else if (arity == 4) {
+      // {:abs_eq, target_var, [{var, coeff}, ...], constant}
+      auto tag = fine::decode<fine::Atom>(env, elems[0]);
+      if (tag == "abs_eq") {
+        auto target_name = fine::decode<fine::Atom>(env, elems[1]);
+        auto terms = fine::decode<std::vector<std::tuple<fine::Atom, int64_t>>>(env, elems[2]);
+        auto constant = fine::decode<int64_t>(env, elems[3]);
+
+        or_sat::LinearExpr expr;
+        for (const auto &[var_name, coeff] : terms) {
+          expr += or_sat::LinearExpr(var_map.at(var_name.to_string())) * coeff;
+        }
+        expr += constant;
+
+        builder.AddAbsEquality(var_map.at(target_name.to_string()), expr);
+      }
     } else if (arity == 3) {
       // {[{var, coeff}...], op, rhs}
       auto terms = fine::decode<std::vector<std::tuple<fine::Atom, int64_t>>>(env, elems[0]);
