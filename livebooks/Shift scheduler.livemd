@@ -7,9 +7,11 @@ Mix.install([
 ])
 ```
 
-## Section
+## Setup
 
 ```elixir
+use OrTools.CpSat
+
 defmodule Helpers do
   def with_ids(items, offset \\ 1) do
     Enum.with_index(items, fn item, i -> Map.put(item, :id, i + offset) end)
@@ -30,26 +32,41 @@ defmodule Helpers do
       }
     end
   end
+
+  def to_minutes(%Duration{} = d), do: d.hour * 60 + d.minute
+
+  def format_minutes(minutes) do
+    h = div(minutes, 60)
+    m = rem(minutes, 60)
+    if m == 0, do: "#{h}h", else: "#{h}h#{m}m"
+  end
 end
 
-employees = [
-  %{name: "Alice"},
-  %{name: "Bob"},
-  %{name: "Charlie"},
-  %{name: "Dana"}
-]
-|> Helpers.with_ids()
+employees =
+  [
+    %{name: "Alice", contract: Duration.new!(hour: 40)},
+    %{name: "Bob", contract: Duration.new!(hour: 40)},
+    %{name: "Charlie", contract: Duration.new!(hour: 20)},
+    %{name: "Dana", contract: Duration.new!(hour: 20)},
+    %{name: "Eve", contract: nil}
+  ]
+  |> Helpers.with_ids()
 
 shifts =
   Helpers.build_shifts(~D[2026-03-02], ~D[2026-03-06], [
     %{name: "Early", start_time: ~T[08:00:00], duration: Duration.new!(hour: 8)},
-    %{name: "Late", start_time: ~T[10:00:00], duration: Duration.new!(hour: 8)}
+    %{name: "Early", start_time: ~T[08:00:00], duration: Duration.new!(hour: 8)},
+    %{name: "Late", start_time: ~T[10:00:00], duration: Duration.new!(hour: 8)},
   ])
   |> Helpers.with_ids()
 ```
 
+## Solve
+
 ```elixir
 defmodule ShiftScheduler do
+  def var_name(employee, shift), do: :"e#{employee.id}_s#{shift.id}"
+
   def init_variables(model, employees, shifts) do
     Enum.reduce(employees, model, fn employee, model ->
       Enum.reduce(shifts, model, fn shift, model ->
@@ -76,23 +93,38 @@ defmodule ShiftScheduler do
     end)
   end
 
-  def balance_shifts(model, employees, shifts) do
-    num_shifts = length(shifts)
-    num_employees = length(employees)
-    min_possible = div(num_shifts, num_employees)
-    max_possible = min_possible + 1
-  
-    Enum.reduce(employees, model, fn employee, model ->
-      assignments = Enum.map(shifts, fn shift -> var_name(employee, shift) end)
-  
-      model
-      |> CpSat.constrain(sum(assignments) >= min_possible)
-      |> CpSat.constrain(sum(assignments) <= max_possible)
-    end)
-  end
+  def respect_contracts(model, employees, shifts) do
+    contracted = Enum.filter(employees, & &1.contract)
 
-  def var_name(employee, shift) do
-    :"e#{employee.id}_s#{shift.id}"
+    least_common_multiple =
+      contracted
+      |> Enum.map(fn employee -> Helpers.to_minutes(employee.contract) end)
+      |> Enum.reduce(fn a, b -> div(a * b, Integer.gcd(a, b)) end)
+
+    model =
+      Enum.reduce(employees, model, fn employee, model ->
+        case employee.contract do
+          nil ->
+            model
+
+          contract ->
+            minutes = Enum.map(shifts, fn shift ->
+              {var_name(employee, shift), Helpers.to_minutes(shift.duration)}
+            end)
+
+            CpSat.constrain(model, sum(minutes) <= Helpers.to_minutes(contract))
+        end
+      end)
+
+    # Maximize with fairness: weight inversely by contract so all fill proportionally
+    fair_terms =
+      for employee <- contracted, shift <- shifts do
+        contract_minutes = Helpers.to_minutes(employee.contract)
+        weight = div(least_common_multiple, contract_minutes) * Helpers.to_minutes(shift.duration)
+        {var_name(employee, shift), weight}
+      end
+
+    CpSat.maximize(model, sum(fair_terms))
   end
 
   def print_result(result, employees, shifts) do
@@ -103,17 +135,28 @@ defmodule ShiftScheduler do
           into: %{} do
         {{employee.id, shift.date}, shift.name}
       end
-    
+
     dates = shifts |> Enum.map(& &1.date) |> Enum.uniq() |> Enum.sort(Date)
-    
-    header = ["" | Enum.map(dates, &Calendar.strftime(&1, "%A %d"))]
+
+    header = ["" | Enum.map(dates, &Calendar.strftime(&1, "%A %d")) ++ ["Total", "Contract"]]
     separator = Enum.map(header, fn _ -> "---" end)
-    
+
     rows =
       Enum.map(employees, fn employee ->
-        [employee.name | Enum.map(dates, fn date -> assignments[{employee.id, date}] || "-" end)]
+        day_cells =
+          Enum.map(dates, fn date -> assignments[{employee.id, date}] || "-" end)
+
+        total_minutes =
+          shifts
+          |> Enum.filter(fn s -> result.values[var_name(employee, s)] == 1 end)
+          |> Enum.map(&Helpers.to_minutes(&1.duration))
+          |> Enum.sum()
+
+        contract = if employee.contract, do: Helpers.format_minutes(Helpers.to_minutes(employee.contract)), else: "extra"
+
+        [employee.name | day_cells ++ [Helpers.format_minutes(total_minutes), contract]]
       end)
-    
+
     [header, separator | rows]
     |> Enum.map(fn cols -> "| " <> Enum.join(cols, " | ") <> " |" end)
     |> Enum.join("\n")
@@ -121,12 +164,12 @@ defmodule ShiftScheduler do
   end
 end
 
-model = 
+model =
   CpSat.new()
   |> ShiftScheduler.init_variables(employees, shifts)
-  |> ShiftScheduler.one_employee_per_shift(employees,shifts)
+  |> ShiftScheduler.one_employee_per_shift(employees, shifts)
   |> ShiftScheduler.one_shift_per_day(employees, shifts)
-  |> ShiftScheduler.balance_shifts(employees, shifts)
+  |> ShiftScheduler.respect_contracts(employees, shifts)
 
 result = CpSat.solve!(model)
 

@@ -341,9 +341,14 @@ defmodule OrTools.CpSat do
     quote do: Enum.map(unquote(o), fn {v, c} -> {v, -c} end)
   end
 
-  # sum(vars) — a runtime list of variable names, each with coefficient 1
+  # sum(list) — accepts either a list of atoms (coeff 1 each) or {atom, coeff} tuples
   defp quote_collect_terms({:sum, _, [arg]}) do
-    quote do: Enum.map(unquote(arg), fn name -> {name, 1} end)
+    quote do
+      Enum.map(unquote(arg), fn
+        {name, coeff} when is_atom(name) and is_integer(coeff) -> {name, coeff}
+        name when is_atom(name) -> {name, 1}
+      end)
+    end
   end
 
   # coeff * var where both are literals
