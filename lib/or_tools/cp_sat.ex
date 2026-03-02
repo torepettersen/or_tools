@@ -37,6 +37,11 @@ defmodule OrTools.CpSat do
   @doc "Creates a new empty model."
   def new, do: %__MODULE__{}
 
+  @doc "Adds a boolean (0/1) variable with the given name."
+  def bool_var(%__MODULE__{} = model, name) when is_atom(name) do
+    %{model | vars: model.vars ++ [{name, 0, 1}]}
+  end
+
   @doc "Adds an integer variable with the given name and range."
   def int_var(%__MODULE__{} = model, name, %Range{first: lb, last: ub}) when is_atom(name) do
     %{model | vars: model.vars ++ [{name, lb, ub}]}
@@ -336,6 +341,11 @@ defmodule OrTools.CpSat do
     quote do: Enum.map(unquote(o), fn {v, c} -> {v, -c} end)
   end
 
+  # sum(vars) — a runtime list of variable names, each with coefficient 1
+  defp quote_collect_terms({:sum, _, [arg]}) do
+    quote do: Enum.map(unquote(arg), fn name -> {name, 1} end)
+  end
+
   # coeff * var where both are literals
   defp quote_collect_terms({:*, _, [coeff, var]}) when is_integer(coeff) and is_atom(var) do
     [{var, coeff}]
@@ -388,8 +398,13 @@ defmodule OrTools.CpSat do
     [{:__const__, int}]
   end
 
-  # Runtime variable reference (e.g. `x` where x = :x)
+  # Runtime expression — could be a variable name (atom) or a constant (integer)
   defp quote_collect_terms(other) do
-    quote do: [{unquote(other), 1}]
+    quote do
+      case unquote(other) do
+        val when is_atom(val) -> [{val, 1}]
+        val when is_integer(val) -> [{:__const__, val}]
+      end
+    end
   end
 end
