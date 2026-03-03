@@ -185,6 +185,24 @@ std::tuple<fine::Atom, std::map<fine::Atom, int64_t>, double> solve(
         }
 
         builder.AddMultiplicationEquality(var_map.at(target_name.to_string()), factors);
+      } else if (tag == "min_eq") {
+        auto target_name = fine::decode<fine::Atom>(env, elems[1]);
+        auto names = fine::decode<std::vector<fine::Atom>>(env, elems[2]);
+
+        std::vector<or_sat::IntVar> int_vars;
+        for (const auto &n : names) {
+          int_vars.push_back(var_map.at(n.to_string()));
+        }
+        builder.AddMinEquality(var_map.at(target_name.to_string()), int_vars);
+      } else if (tag == "max_eq") {
+        auto target_name = fine::decode<fine::Atom>(env, elems[1]);
+        auto names = fine::decode<std::vector<fine::Atom>>(env, elems[2]);
+
+        std::vector<or_sat::IntVar> int_vars;
+        for (const auto &n : names) {
+          int_vars.push_back(var_map.at(n.to_string()));
+        }
+        builder.AddMaxEquality(var_map.at(target_name.to_string()), int_vars);
       }
     } else if (arity == 3) {
       // {[{var, coeff}...], op, rhs}

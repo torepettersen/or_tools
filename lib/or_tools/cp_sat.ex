@@ -219,6 +219,8 @@ defmodule OrTools.CpSat do
       {:__pow__, _inner, _exp, _coeff} = pow_term -> pow_term
       {:__mul__, _left, _right, _coeff} = mul_term -> mul_term
       {:__div__, _dividend, _divisor, _coeff} = div_term -> div_term
+      {:__min__, _vars, _coeff} = min_term -> min_term
+      {:__max__, _vars, _coeff} = max_term -> max_term
       {name, coeff} when is_atom(name) and is_integer(coeff) -> {name, coeff}
       name when is_atom(name) -> {name, 1}
     end)
@@ -290,6 +292,8 @@ defmodule OrTools.CpSat do
       {:__pow__, inner, exp, coeff} -> {:__pow__, inner, exp, -coeff}
       {:__mul__, left, right, coeff} -> {:__mul__, left, right, -coeff}
       {:__div__, dividend, divisor, coeff} -> {:__div__, dividend, divisor, -coeff}
+      {:__min__, vars, coeff} -> {:__min__, vars, -coeff}
+      {:__max__, vars, coeff} -> {:__max__, vars, -coeff}
       {v, c} -> {v, -c}
     end)
   end
@@ -404,6 +408,53 @@ defmodule OrTools.CpSat do
 
         {model, [{mul_name, coeff} | acc]}
 
+      {:__min__, var_names, coeff}, {model, acc} ->
+        bounds =
+          Enum.map(var_names, fn name ->
+            {lb, ub} = Map.get(var_bounds, name, {0, 0})
+            {lb, ub}
+          end)
+
+        min_name = :"__min_#{:erlang.unique_integer([:positive])}"
+
+        model =
+          int_var(
+            model,
+            min_name,
+            Enum.min_by(bounds, &elem(&1, 0)) |> elem(0),
+            Enum.min_by(bounds, &elem(&1, 1)) |> elem(1)
+          )
+
+        model = %{
+          model
+          | constraints: model.constraints ++ [{:min_eq, min_name, var_names}]
+        }
+
+        {model, [{min_name, coeff} | acc]}
+
+      {:__max__, var_names, coeff}, {model, acc} ->
+        bounds =
+          Enum.map(var_names, fn name ->
+            Map.get(var_bounds, name, {0, 0})
+          end)
+
+        max_name = :"__max_#{:erlang.unique_integer([:positive])}"
+
+        model =
+          int_var(
+            model,
+            max_name,
+            Enum.max_by(bounds, &elem(&1, 0)) |> elem(0),
+            Enum.max_by(bounds, &elem(&1, 1)) |> elem(1)
+          )
+
+        model = %{
+          model
+          | constraints: model.constraints ++ [{:max_eq, max_name, var_names}]
+        }
+
+        {model, [{max_name, coeff} | acc]}
+
       {:__div__, dividend_terms, divisor_terms, coeff}, {model, acc} ->
         [{dividend_var, 1}] = elem(split_terms(dividend_terms), 0)
         [{divisor_var, 1}] = elem(split_terms(divisor_terms), 0)
@@ -445,7 +496,8 @@ defmodule OrTools.CpSat do
             s = Atom.to_string(name)
 
             String.starts_with?(s, "__abs_") or String.starts_with?(s, "__pow_") or
-              String.starts_with?(s, "__mul_") or String.starts_with?(s, "__div_")
+              String.starts_with?(s, "__mul_") or String.starts_with?(s, "__div_") or
+              String.starts_with?(s, "__min_") or String.starts_with?(s, "__max_")
           end)
 
         {:ok, %{status: status, values: visible_values, objective: objective}}
@@ -512,8 +564,9 @@ defmodule OrTools.CpSat do
     end
   end
 
-  defp validate_constraint({:mul_eq, target, factors}, declared) do
-    check_var_names([target | factors], declared)
+  defp validate_constraint({tag, target, var_names}, declared)
+       when tag in [:mul_eq, :min_eq, :max_eq] do
+    check_var_names([target | var_names], declared)
   end
 
   defp validate_constraint({:div_eq, target, dividend, divisor}, declared) do
@@ -630,6 +683,15 @@ defmodule OrTools.CpSat do
     quote do: OrTools.CpSat.__negate_raw_terms__(unquote(o))
   end
 
+  # min(var_list) / max(var_list) — emits marker tuples for min/max equality
+  defp quote_collect_terms({:min, _, [arg]}) do
+    quote do: [{:__min__, unquote(arg), 1}]
+  end
+
+  defp quote_collect_terms({:max, _, [arg]}) do
+    quote do: [{:__max__, unquote(arg), 1}]
+  end
+
   # abs(expr) — emits a marker tuple that __build_objective__ will linearize
   defp quote_collect_terms({:abs, _, [inner]}) do
     inner_ast = quote_collect_terms(inner)
@@ -657,6 +719,8 @@ defmodule OrTools.CpSat do
         {:__pow__, _inner, _exp, _coeff} = pow_term -> [pow_term]
         {:__mul__, _left, _right, _coeff} = mul_term -> [mul_term]
         {:__div__, _dividend, _divisor, _coeff} = div_term -> [div_term]
+        {:__min__, _vars, _coeff} = min_term -> [min_term]
+        {:__max__, _vars, _coeff} = max_term -> [max_term]
         {name, coeff} when is_atom(name) and is_integer(coeff) -> [{name, coeff}]
         name when is_atom(name) -> [{name, 1}]
         list when is_list(list) -> list
@@ -674,6 +738,8 @@ defmodule OrTools.CpSat do
         {:__pow__, inner, exp, c} -> {:__pow__, inner, exp, c * unquote(coeff)}
         {:__mul__, left, right, c} -> {:__mul__, left, right, c * unquote(coeff)}
         {:__div__, dividend, divisor, c} -> {:__div__, dividend, divisor, c * unquote(coeff)}
+        {:__min__, vars, c} -> {:__min__, vars, c * unquote(coeff)}
+        {:__max__, vars, c} -> {:__max__, vars, c * unquote(coeff)}
         {name, c} -> {name, c * unquote(coeff)}
       end)
     end
@@ -688,9 +754,45 @@ defmodule OrTools.CpSat do
         {:__pow__, inner, exp, c} -> {:__pow__, inner, exp, c * unquote(coeff)}
         {:__mul__, left, right, c} -> {:__mul__, left, right, c * unquote(coeff)}
         {:__div__, dividend, divisor, c} -> {:__div__, dividend, divisor, c * unquote(coeff)}
+        {:__min__, vars, c} -> {:__min__, vars, c * unquote(coeff)}
+        {:__max__, vars, c} -> {:__max__, vars, c * unquote(coeff)}
         {name, c} -> {name, c * unquote(coeff)}
       end)
     end
+  end
+
+  # coeff * min(list) / coeff * max(list)
+  defp quote_collect_terms({:*, _, [coeff, {:min, _, [arg]}]}) when is_integer(coeff) do
+    quote do: [{:__min__, unquote(arg), unquote(coeff)}]
+  end
+
+  defp quote_collect_terms({:*, _, [{:min, _, [arg]}, coeff]}) when is_integer(coeff) do
+    quote do: [{:__min__, unquote(arg), unquote(coeff)}]
+  end
+
+  defp quote_collect_terms({:*, _, [coeff, {:max, _, [arg]}]}) when is_integer(coeff) do
+    quote do: [{:__max__, unquote(arg), unquote(coeff)}]
+  end
+
+  defp quote_collect_terms({:*, _, [{:max, _, [arg]}, coeff]}) when is_integer(coeff) do
+    quote do: [{:__max__, unquote(arg), unquote(coeff)}]
+  end
+
+  # runtime coeff * min/max
+  defp quote_collect_terms({:*, _, [coeff, {:min, _, [arg]}]}) do
+    quote do: [{:__min__, unquote(arg), unquote(coeff)}]
+  end
+
+  defp quote_collect_terms({:*, _, [{:min, _, [arg]}, coeff]}) do
+    quote do: [{:__min__, unquote(arg), unquote(coeff)}]
+  end
+
+  defp quote_collect_terms({:*, _, [coeff, {:max, _, [arg]}]}) do
+    quote do: [{:__max__, unquote(arg), unquote(coeff)}]
+  end
+
+  defp quote_collect_terms({:*, _, [{:max, _, [arg]}, coeff]}) do
+    quote do: [{:__max__, unquote(arg), unquote(coeff)}]
   end
 
   # coeff * div(a, b) — scale the div marker's coefficient

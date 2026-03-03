@@ -426,6 +426,71 @@ defmodule OrTools.CpSatTest do
     end
   end
 
+  describe "min/max" do
+    test "maximize the minimum (fairness)" do
+      result =
+        CpSat.new()
+        |> CpSat.int_var(:x, 0..10)
+        |> CpSat.int_var(:y, 0..10)
+        |> CpSat.int_var(:z, 0..10)
+        |> CpSat.constrain(:x + :y + :z == 15)
+        |> CpSat.maximize(min([:x, :y, :z]))
+        |> CpSat.solve!()
+
+      assert result.status == :optimal
+      assert result.objective == 5.0
+    end
+
+    test "minimize the maximum (balance)" do
+      result =
+        CpSat.new()
+        |> CpSat.int_var(:x, 0..10)
+        |> CpSat.int_var(:y, 0..10)
+        |> CpSat.int_var(:z, 0..10)
+        |> CpSat.constrain(:x + :y + :z == 15)
+        |> CpSat.minimize(max([:x, :y, :z]))
+        |> CpSat.solve!()
+
+      assert result.status == :optimal
+      assert result.objective == 5.0
+    end
+
+    test "max of variables" do
+      result =
+        CpSat.new()
+        |> CpSat.int_var(:x, 0..3)
+        |> CpSat.int_var(:y, 0..7)
+        |> CpSat.maximize(max([:x, :y]))
+        |> CpSat.solve!()
+
+      assert result.status == :optimal
+      assert result.objective == 7.0
+    end
+
+    test "min of variables" do
+      result =
+        CpSat.new()
+        |> CpSat.int_var(:x, 3..10)
+        |> CpSat.int_var(:y, 5..10)
+        |> CpSat.minimize(min([:x, :y]))
+        |> CpSat.solve!()
+
+      assert result.status == :optimal
+      assert result.objective == 3.0
+    end
+
+    test "hidden min/max variables are not in result" do
+      result =
+        CpSat.new()
+        |> CpSat.int_var(:x, 0..10)
+        |> CpSat.int_var(:y, 0..10)
+        |> CpSat.maximize(min([:x, :y]))
+        |> CpSat.solve!()
+
+      assert Map.keys(result.values) |> Enum.sort() == [:x, :y]
+    end
+  end
+
   describe "boolean constraints" do
     test "exactly_one" do
       result =
