@@ -150,6 +150,7 @@ defmodule OrTools.CpSat do
     |> List.flatten()
     |> Enum.map(fn
       {:__abs__, _inner, _coeff} = abs_term -> abs_term
+      {:__pow__, _inner, _exp, _coeff} = pow_term -> pow_term
       {name, coeff} when is_atom(name) and is_integer(coeff) -> {name, coeff}
       name when is_atom(name) -> {name, 1}
     end)
@@ -218,18 +219,19 @@ defmodule OrTools.CpSat do
   def __negate_raw_terms__(terms) do
     Enum.map(terms, fn
       {:__abs__, inner, coeff} -> {:__abs__, inner, -coeff}
+      {:__pow__, inner, exp, coeff} -> {:__pow__, inner, exp, -coeff}
       {v, c} -> {v, -c}
     end)
   end
 
   @doc false
   def __build_objective__(%__MODULE__{} = model, sense, raw_terms) do
-    {model, flat_terms} = flatten_abs_terms(model, raw_terms, sense)
+    {model, flat_terms} = flatten_special_terms(model, raw_terms, sense)
     {vars, _const} = split_terms(flat_terms)
     set_objective(model, sense, vars)
   end
 
-  defp flatten_abs_terms(model, terms, _sense) do
+  defp flatten_special_terms(model, terms, _sense) do
     var_bounds = Map.new(model.vars, fn {name, lb, ub} -> {name, {lb, ub}} end)
 
     Enum.reduce(terms, {model, []}, fn
@@ -252,6 +254,68 @@ defmodule OrTools.CpSat do
 
         {model, [{abs_name, coeff} | acc]}
 
+      {:__pow__, base_terms, exponent, coeff}, {model, acc} ->
+        {base_vars, _base_const} = split_terms(base_terms)
+
+        # For pow we need a single variable as the base (e.g. :x, not :x + :y)
+        # We support single-variable bases only
+        [{base_var, base_coeff}] = base_vars
+
+        {lb, ub} = Map.get(var_bounds, base_var, {0, 0})
+        effective_lb = lb * base_coeff
+        effective_ub = ub * base_coeff
+
+        # Chain multiplications: x^2 = x*x, x^3 = (x*x)*x, etc.
+        # First, create a scaled base variable if coeff != 1
+        {model, var_bounds, source_var} =
+          if base_coeff == 1 do
+            {model, var_bounds, base_var}
+          else
+            scaled_name = :"__pow_base_#{:erlang.unique_integer([:positive])}"
+            scaled_lb = min(effective_lb, effective_ub)
+            scaled_ub = max(effective_lb, effective_ub)
+            model = int_var(model, scaled_name, scaled_lb, scaled_ub)
+            var_bounds = Map.put(var_bounds, scaled_name, {scaled_lb, scaled_ub})
+
+            model = %{
+              model
+              | constraints:
+                  model.constraints ++ [{[{base_var, base_coeff}], :==, 0, scaled_name}]
+            }
+
+            {model, var_bounds, scaled_name}
+          end
+
+        # Chain: aux1 = source * source, aux2 = aux1 * source, ...
+        {model, _var_bounds, result_var} =
+          Enum.reduce(2..exponent, {model, var_bounds, source_var}, fn i, {model, vb, prev_var} ->
+            pow_name = :"__pow_#{:erlang.unique_integer([:positive])}"
+
+            {prev_lb, prev_ub} = Map.get(vb, prev_var, {0, 0})
+            {src_lb, src_ub} = Map.get(vb, source_var, {0, 0})
+
+            products = [prev_lb * src_lb, prev_lb * src_ub, prev_ub * src_lb, prev_ub * src_ub]
+            pow_lb = Enum.min(products)
+            pow_ub = Enum.max(products)
+
+            model = int_var(model, pow_name, pow_lb, pow_ub)
+            vb = Map.put(vb, pow_name, {pow_lb, pow_ub})
+
+            factors =
+              if i == 2,
+                do: [source_var, source_var],
+                else: [prev_var, source_var]
+
+            model = %{
+              model
+              | constraints: model.constraints ++ [{:mul_eq, pow_name, factors}]
+            }
+
+            {model, vb, pow_name}
+          end)
+
+        {model, [{result_var, coeff} | acc]}
+
       term, {model, acc} ->
         {model, [term | acc]}
     end)
@@ -270,7 +334,8 @@ defmodule OrTools.CpSat do
 
         visible_values =
           Map.reject(values, fn {name, _} ->
-            name |> Atom.to_string() |> String.starts_with?("__abs_")
+            s = Atom.to_string(name)
+            String.starts_with?(s, "__abs_") or String.starts_with?(s, "__pow_")
           end)
 
         {:ok, %{status: status, values: visible_values, objective: objective}}
@@ -317,10 +382,6 @@ defmodule OrTools.CpSat do
     end
   end
 
-  defp validate_constraint({terms, _op, _rhs}, declared) do
-    check_terms(terms, declared)
-  end
-
   defp validate_constraint({:all_different, var_names}, declared) do
     check_var_names(var_names, declared)
   end
@@ -330,6 +391,14 @@ defmodule OrTools.CpSat do
          :ok <- check_terms(terms, declared) do
       :ok
     end
+  end
+
+  defp validate_constraint({:mul_eq, target, factors}, declared) do
+    check_var_names([target | factors], declared)
+  end
+
+  defp validate_constraint({terms, _op, _rhs}, declared) do
+    check_terms(terms, declared)
   end
 
   defp validate_objective(nil, _declared), do: :ok
@@ -444,11 +513,18 @@ defmodule OrTools.CpSat do
     quote do: [{:__abs__, unquote(inner_ast), 1}]
   end
 
-  # sum(list) — accepts a list of atoms, {atom, coeff} tuples, expr results, or {:__abs__, terms, coeff} markers
+  # pow(expr, exponent) — emits a marker tuple for multiplication equality
+  defp quote_collect_terms({:pow, _, [base, exp]}) when is_integer(exp) and exp >= 2 do
+    base_ast = quote_collect_terms(base)
+    quote do: [{:__pow__, unquote(base_ast), unquote(exp), 1}]
+  end
+
+  # sum(list) — accepts a list of atoms, {atom, coeff} tuples, expr results, or marker tuples
   defp quote_collect_terms({:sum, _, [arg]}) do
     quote do
       Enum.flat_map(unquote(arg), fn
         {:__abs__, _inner, _coeff} = abs_term -> [abs_term]
+        {:__pow__, _inner, _exp, _coeff} = pow_term -> [pow_term]
         {name, coeff} when is_atom(name) and is_integer(coeff) -> [{name, coeff}]
         name when is_atom(name) -> [{name, 1}]
         list when is_list(list) -> list
@@ -463,6 +539,7 @@ defmodule OrTools.CpSat do
     quote do
       Enum.map(unquote(sum_ast), fn
         {:__abs__, inner, c} -> {:__abs__, inner, c * unquote(coeff)}
+        {:__pow__, inner, exp, c} -> {:__pow__, inner, exp, c * unquote(coeff)}
         {name, c} -> {name, c * unquote(coeff)}
       end)
     end
@@ -474,9 +551,36 @@ defmodule OrTools.CpSat do
     quote do
       Enum.map(unquote(sum_ast), fn
         {:__abs__, inner, c} -> {:__abs__, inner, c * unquote(coeff)}
+        {:__pow__, inner, exp, c} -> {:__pow__, inner, exp, c * unquote(coeff)}
         {name, c} -> {name, c * unquote(coeff)}
       end)
     end
+  end
+
+  # coeff * pow(expr, n) — scale the pow marker's coefficient
+  defp quote_collect_terms({:*, _, [coeff, {:pow, _, [base, exp]}]})
+       when is_integer(coeff) and is_integer(exp) and exp >= 2 do
+    base_ast = quote_collect_terms(base)
+    quote do: [{:__pow__, unquote(base_ast), unquote(exp), unquote(coeff)}]
+  end
+
+  defp quote_collect_terms({:*, _, [{:pow, _, [base, exp]}, coeff]})
+       when is_integer(coeff) and is_integer(exp) and exp >= 2 do
+    base_ast = quote_collect_terms(base)
+    quote do: [{:__pow__, unquote(base_ast), unquote(exp), unquote(coeff)}]
+  end
+
+  # runtime_coeff * pow(expr, n)
+  defp quote_collect_terms({:*, _, [coeff, {:pow, _, [base, exp]}]})
+       when is_integer(exp) and exp >= 2 do
+    base_ast = quote_collect_terms(base)
+    quote do: [{:__pow__, unquote(base_ast), unquote(exp), unquote(coeff)}]
+  end
+
+  defp quote_collect_terms({:*, _, [{:pow, _, [base, exp]}, coeff]})
+       when is_integer(exp) and exp >= 2 do
+    base_ast = quote_collect_terms(base)
+    quote do: [{:__pow__, unquote(base_ast), unquote(exp), unquote(coeff)}]
   end
 
   # coeff * abs(expr) — scale the abs marker's coefficient

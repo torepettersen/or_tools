@@ -340,6 +340,68 @@ defmodule OrTools.CpSatTest do
     end
   end
 
+  describe "pow" do
+    test "maximize x squared" do
+      result =
+        CpSat.new()
+        |> CpSat.int_var(:x, 0..10)
+        |> CpSat.maximize(pow(:x, 2))
+        |> CpSat.solve!()
+
+      assert result == %{status: :optimal, values: %{x: 10}, objective: 100.0}
+    end
+
+    test "minimize x squared" do
+      result =
+        CpSat.new()
+        |> CpSat.int_var(:x, 0..10)
+        |> CpSat.minimize(pow(:x, 2))
+        |> CpSat.solve!()
+
+      assert result == %{status: :optimal, values: %{x: 0}, objective: 0.0}
+    end
+
+    test "maximize x cubed" do
+      result =
+        CpSat.new()
+        |> CpSat.int_var(:x, 0..5)
+        |> CpSat.maximize(pow(:x, 3))
+        |> CpSat.solve!()
+
+      assert result == %{status: :optimal, values: %{x: 5}, objective: 125.0}
+    end
+
+    test "coefficient with pow" do
+      result =
+        CpSat.new()
+        |> CpSat.int_var(:x, 0..10)
+        |> CpSat.maximize(3 * pow(:x, 2))
+        |> CpSat.solve!()
+
+      assert result == %{status: :optimal, values: %{x: 10}, objective: 300.0}
+    end
+
+    test "pow combined with linear terms" do
+      result =
+        CpSat.new()
+        |> CpSat.int_var(:x, 0..10)
+        |> CpSat.maximize(pow(:x, 2) + :x)
+        |> CpSat.solve!()
+
+      assert result == %{status: :optimal, values: %{x: 10}, objective: 110.0}
+    end
+
+    test "hidden pow variables are not in result" do
+      result =
+        CpSat.new()
+        |> CpSat.int_var(:x, 0..10)
+        |> CpSat.maximize(pow(:x, 2))
+        |> CpSat.solve!()
+
+      assert Map.keys(result.values) == [:x]
+    end
+  end
+
   describe "validation" do
     test "solve! raises on unknown variable in constraint" do
       assert_raise ArgumentError, ~r/unknown variable/, fn ->

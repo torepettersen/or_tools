@@ -127,6 +127,20 @@ std::tuple<fine::Atom, std::map<fine::Atom, int64_t>, double> solve(
 
         builder.AddAbsEquality(var_map.at(target_name.to_string()), expr);
       }
+    } else if (arity == 3 && enif_is_atom(env, elems[0])) {
+      // {:mul_eq, target_var, [factor_var, ...]}
+      auto tag = fine::decode<fine::Atom>(env, elems[0]);
+      if (tag == "mul_eq") {
+        auto target_name = fine::decode<fine::Atom>(env, elems[1]);
+        auto factor_names = fine::decode<std::vector<fine::Atom>>(env, elems[2]);
+
+        std::vector<or_sat::IntVar> factors;
+        for (const auto &name : factor_names) {
+          factors.push_back(var_map.at(name.to_string()));
+        }
+
+        builder.AddMultiplicationEquality(var_map.at(target_name.to_string()), factors);
+      }
     } else if (arity == 3) {
       // {[{var, coeff}...], op, rhs}
       auto terms = fine::decode<std::vector<std::tuple<fine::Atom, int64_t>>>(env, elems[0]);
