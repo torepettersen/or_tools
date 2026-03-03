@@ -25,6 +25,30 @@ defmodule OrTools.CpSatTest do
       assert result == %{status: :optimal, values: %{x: 0, y: 0}, objective: 0.0}
     end
 
+    test "nonlinear variable multiplication" do
+      result =
+        CpSat.new()
+        |> CpSat.int_var(:x, 0..10)
+        |> CpSat.int_var(:y, 0..10)
+        |> CpSat.maximize(:x * :y)
+        |> CpSat.solve!()
+
+      assert result == %{status: :optimal, values: %{x: 10, y: 10}, objective: 100.0}
+    end
+
+    test "integer division" do
+      result =
+        CpSat.new()
+        |> CpSat.int_var(:x, 0..100)
+        |> CpSat.int_var(:y, 1..10)
+        |> CpSat.constrain(:x == 50)
+        |> CpSat.constrain(:y == 7)
+        |> CpSat.maximize(div(:x, :y))
+        |> CpSat.solve!()
+
+      assert result == %{status: :optimal, values: %{x: 50, y: 7}, objective: 7.0}
+    end
+
     test "returns infeasible for contradictory constraints" do
       {:ok, result} =
         CpSat.new()

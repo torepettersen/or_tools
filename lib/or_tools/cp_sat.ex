@@ -151,6 +151,8 @@ defmodule OrTools.CpSat do
     |> Enum.map(fn
       {:__abs__, _inner, _coeff} = abs_term -> abs_term
       {:__pow__, _inner, _exp, _coeff} = pow_term -> pow_term
+      {:__mul__, _left, _right, _coeff} = mul_term -> mul_term
+      {:__div__, _dividend, _divisor, _coeff} = div_term -> div_term
       {name, coeff} when is_atom(name) and is_integer(coeff) -> {name, coeff}
       name when is_atom(name) -> {name, 1}
     end)
@@ -220,6 +222,8 @@ defmodule OrTools.CpSat do
     Enum.map(terms, fn
       {:__abs__, inner, coeff} -> {:__abs__, inner, -coeff}
       {:__pow__, inner, exp, coeff} -> {:__pow__, inner, exp, -coeff}
+      {:__mul__, left, right, coeff} -> {:__mul__, left, right, -coeff}
+      {:__div__, dividend, divisor, coeff} -> {:__div__, dividend, divisor, -coeff}
       {v, c} -> {v, -c}
     end)
   end
@@ -316,6 +320,44 @@ defmodule OrTools.CpSat do
 
         {model, [{result_var, coeff} | acc]}
 
+      {:__mul__, left_terms, right_terms, coeff}, {model, acc} ->
+        [{left_var, 1}] = elem(split_terms(left_terms), 0)
+        [{right_var, 1}] = elem(split_terms(right_terms), 0)
+
+        {lb_l, ub_l} = Map.get(var_bounds, left_var, {0, 0})
+        {lb_r, ub_r} = Map.get(var_bounds, right_var, {0, 0})
+        products = for l <- [lb_l, ub_l], r <- [lb_r, ub_r], do: l * r
+
+        mul_name = :"__mul_#{:erlang.unique_integer([:positive])}"
+        model = int_var(model, mul_name, Enum.min(products), Enum.max(products))
+
+        model = %{
+          model
+          | constraints: model.constraints ++ [{:mul_eq, mul_name, [left_var, right_var]}]
+        }
+
+        {model, [{mul_name, coeff} | acc]}
+
+      {:__div__, dividend_terms, divisor_terms, coeff}, {model, acc} ->
+        [{dividend_var, 1}] = elem(split_terms(dividend_terms), 0)
+        [{divisor_var, 1}] = elem(split_terms(divisor_terms), 0)
+
+        {lb_n, ub_n} = Map.get(var_bounds, dividend_var, {0, 0})
+        {lb_d, ub_d} = Map.get(var_bounds, divisor_var, {1, 1})
+
+        quotients =
+          for n <- [lb_n, ub_n], d <- [lb_d, ub_d], d != 0, do: Kernel.div(n, d)
+
+        div_name = :"__div_#{:erlang.unique_integer([:positive])}"
+        model = int_var(model, div_name, Enum.min(quotients), Enum.max(quotients))
+
+        model = %{
+          model
+          | constraints: model.constraints ++ [{:div_eq, div_name, dividend_var, divisor_var}]
+        }
+
+        {model, [{div_name, coeff} | acc]}
+
       term, {model, acc} ->
         {model, [term | acc]}
     end)
@@ -335,7 +377,9 @@ defmodule OrTools.CpSat do
         visible_values =
           Map.reject(values, fn {name, _} ->
             s = Atom.to_string(name)
-            String.starts_with?(s, "__abs_") or String.starts_with?(s, "__pow_")
+
+            String.starts_with?(s, "__abs_") or String.starts_with?(s, "__pow_") or
+              String.starts_with?(s, "__mul_") or String.starts_with?(s, "__div_")
           end)
 
         {:ok, %{status: status, values: visible_values, objective: objective}}
@@ -395,6 +439,10 @@ defmodule OrTools.CpSat do
 
   defp validate_constraint({:mul_eq, target, factors}, declared) do
     check_var_names([target | factors], declared)
+  end
+
+  defp validate_constraint({:div_eq, target, dividend, divisor}, declared) do
+    check_var_names([target, dividend, divisor], declared)
   end
 
   defp validate_constraint({terms, _op, _rhs}, declared) do
@@ -513,6 +561,13 @@ defmodule OrTools.CpSat do
     quote do: [{:__abs__, unquote(inner_ast), 1}]
   end
 
+  # div(dividend, divisor) — emits a marker tuple for integer division equality
+  defp quote_collect_terms({:div, _, [dividend, divisor]}) do
+    dividend_ast = quote_collect_terms(dividend)
+    divisor_ast = quote_collect_terms(divisor)
+    quote do: [{:__div__, unquote(dividend_ast), unquote(divisor_ast), 1}]
+  end
+
   # pow(expr, exponent) — emits a marker tuple for multiplication equality
   defp quote_collect_terms({:pow, _, [base, exp]}) when is_integer(exp) and exp >= 2 do
     base_ast = quote_collect_terms(base)
@@ -525,6 +580,8 @@ defmodule OrTools.CpSat do
       Enum.flat_map(unquote(arg), fn
         {:__abs__, _inner, _coeff} = abs_term -> [abs_term]
         {:__pow__, _inner, _exp, _coeff} = pow_term -> [pow_term]
+        {:__mul__, _left, _right, _coeff} = mul_term -> [mul_term]
+        {:__div__, _dividend, _divisor, _coeff} = div_term -> [div_term]
         {name, coeff} when is_atom(name) and is_integer(coeff) -> [{name, coeff}]
         name when is_atom(name) -> [{name, 1}]
         list when is_list(list) -> list
@@ -540,6 +597,8 @@ defmodule OrTools.CpSat do
       Enum.map(unquote(sum_ast), fn
         {:__abs__, inner, c} -> {:__abs__, inner, c * unquote(coeff)}
         {:__pow__, inner, exp, c} -> {:__pow__, inner, exp, c * unquote(coeff)}
+        {:__mul__, left, right, c} -> {:__mul__, left, right, c * unquote(coeff)}
+        {:__div__, dividend, divisor, c} -> {:__div__, dividend, divisor, c * unquote(coeff)}
         {name, c} -> {name, c * unquote(coeff)}
       end)
     end
@@ -552,9 +611,39 @@ defmodule OrTools.CpSat do
       Enum.map(unquote(sum_ast), fn
         {:__abs__, inner, c} -> {:__abs__, inner, c * unquote(coeff)}
         {:__pow__, inner, exp, c} -> {:__pow__, inner, exp, c * unquote(coeff)}
+        {:__mul__, left, right, c} -> {:__mul__, left, right, c * unquote(coeff)}
+        {:__div__, dividend, divisor, c} -> {:__div__, dividend, divisor, c * unquote(coeff)}
         {name, c} -> {name, c * unquote(coeff)}
       end)
     end
+  end
+
+  # coeff * div(a, b) — scale the div marker's coefficient
+  defp quote_collect_terms({:*, _, [coeff, {:div, _, [dividend, divisor]}]})
+       when is_integer(coeff) do
+    dividend_ast = quote_collect_terms(dividend)
+    divisor_ast = quote_collect_terms(divisor)
+    quote do: [{:__div__, unquote(dividend_ast), unquote(divisor_ast), unquote(coeff)}]
+  end
+
+  defp quote_collect_terms({:*, _, [{:div, _, [dividend, divisor]}, coeff]})
+       when is_integer(coeff) do
+    dividend_ast = quote_collect_terms(dividend)
+    divisor_ast = quote_collect_terms(divisor)
+    quote do: [{:__div__, unquote(dividend_ast), unquote(divisor_ast), unquote(coeff)}]
+  end
+
+  # runtime_coeff * div(a, b)
+  defp quote_collect_terms({:*, _, [coeff, {:div, _, [dividend, divisor]}]}) do
+    dividend_ast = quote_collect_terms(dividend)
+    divisor_ast = quote_collect_terms(divisor)
+    quote do: [{:__div__, unquote(dividend_ast), unquote(divisor_ast), unquote(coeff)}]
+  end
+
+  defp quote_collect_terms({:*, _, [{:div, _, [dividend, divisor]}, coeff]}) do
+    dividend_ast = quote_collect_terms(dividend)
+    divisor_ast = quote_collect_terms(divisor)
+    quote do: [{:__div__, unquote(dividend_ast), unquote(divisor_ast), unquote(coeff)}]
   end
 
   # coeff * pow(expr, n) — scale the pow marker's coefficient
@@ -605,6 +694,11 @@ defmodule OrTools.CpSat do
     quote do: [{:__abs__, unquote(inner_ast), unquote(coeff)}]
   end
 
+  # var * var where both are literal atoms — nonlinear multiplication
+  defp quote_collect_terms({:*, _, [left, right]}) when is_atom(left) and is_atom(right) do
+    Macro.escape([{:__mul__, [{left, 1}], [{right, 1}], 1}])
+  end
+
   # coeff * var where both are literals
   defp quote_collect_terms({:*, _, [coeff, var]}) when is_integer(coeff) and is_atom(var) do
     [{var, coeff}]
@@ -627,12 +721,24 @@ defmodule OrTools.CpSat do
         quote do: [{unquote(left), unquote(right)}]
 
       is_atom(left) ->
-        # left is a literal atom, right is a runtime expression (coefficient)
-        quote do: [{unquote(left), unquote(right)}]
+        # left is a literal atom, right could be a runtime var or coefficient
+        quote do
+          r_val = unquote(right)
+
+          if is_atom(r_val),
+            do: [{:__mul__, [{unquote(left), 1}], [{r_val, 1}], 1}],
+            else: [{unquote(left), r_val}]
+        end
 
       is_atom(right) ->
-        # right is a literal atom, left is a runtime expression (coefficient)
-        quote do: [{unquote(right), unquote(left)}]
+        # right is a literal atom, left could be a runtime var or coefficient
+        quote do
+          l_val = unquote(left)
+
+          if is_atom(l_val),
+            do: [{:__mul__, [{l_val, 1}], [{unquote(right), 1}], 1}],
+            else: [{unquote(right), l_val}]
+        end
 
       true ->
         # Both sides are runtime expressions
@@ -640,9 +746,16 @@ defmodule OrTools.CpSat do
           l_val = unquote(left)
           r_val = unquote(right)
 
-          if is_atom(l_val),
-            do: [{l_val, r_val}],
-            else: [{r_val, l_val}]
+          cond do
+            is_atom(l_val) and is_atom(r_val) ->
+              [{:__mul__, [{l_val, 1}], [{r_val, 1}], 1}]
+
+            is_atom(l_val) ->
+              [{l_val, r_val}]
+
+            true ->
+              [{r_val, l_val}]
+          end
         end
     end
   end

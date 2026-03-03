@@ -126,6 +126,15 @@ std::tuple<fine::Atom, std::map<fine::Atom, int64_t>, double> solve(
         expr += constant;
 
         builder.AddAbsEquality(var_map.at(target_name.to_string()), expr);
+      } else if (tag == "div_eq") {
+        auto target_name = fine::decode<fine::Atom>(env, elems[1]);
+        auto dividend_name = fine::decode<fine::Atom>(env, elems[2]);
+        auto divisor_name = fine::decode<fine::Atom>(env, elems[3]);
+
+        builder.AddDivisionEquality(
+            var_map.at(target_name.to_string()),
+            var_map.at(dividend_name.to_string()),
+            var_map.at(divisor_name.to_string()));
       }
     } else if (arity == 3 && enif_is_atom(env, elems[0])) {
       // {:mul_eq, target_var, [factor_var, ...]}
