@@ -14,7 +14,10 @@ defmodule OrTools.MixProject do
   end
 
   defp make_env do
-    %{"FINE_INCLUDE_DIR" => Fine.include_dir()}
+    %{
+      "FINE_INCLUDE_DIR" => Fine.include_dir(),
+      "ORTOOLS_PREFIX" => System.get_env("ORTOOLS_PREFIX", "/usr/local")
+    }
   end
 
   # Run "mix help compile.app" to learn about applications.

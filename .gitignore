@@ -29,3 +29,6 @@ or_tools-*.tar
 /priv/*.so
 /priv/*.dll
 /c_src/*.o
+
+# Env
+.env

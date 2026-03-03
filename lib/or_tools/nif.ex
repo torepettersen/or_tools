@@ -4,7 +4,7 @@ defmodule OrTools.NIF do
   @on_load :load_nifs
 
   def load_nifs do
-    path = :filename.join(:code.priv_dir(:or_tools), ~c"or_tools_nif")
+    path = :filename.join(:code.priv_dir(:or_tools), ~c"cp_sat")
     :erlang.load_nif(path, 0)
   end
 
