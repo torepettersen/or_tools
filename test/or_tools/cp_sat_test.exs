@@ -426,6 +426,100 @@ defmodule OrTools.CpSatTest do
     end
   end
 
+  describe "boolean constraints" do
+    test "exactly_one" do
+      result =
+        CpSat.new()
+        |> CpSat.bool_var(:a)
+        |> CpSat.bool_var(:b)
+        |> CpSat.bool_var(:c)
+        |> CpSat.exactly_one([:a, :b, :c])
+        |> CpSat.maximize(:a + :b + :c)
+        |> CpSat.solve!()
+
+      assert result.status == :optimal
+      assert result.objective == 1.0
+    end
+
+    test "at_most_one" do
+      result =
+        CpSat.new()
+        |> CpSat.bool_var(:a)
+        |> CpSat.bool_var(:b)
+        |> CpSat.bool_var(:c)
+        |> CpSat.at_most_one([:a, :b, :c])
+        |> CpSat.maximize(:a + :b + :c)
+        |> CpSat.solve!()
+
+      assert result.status == :optimal
+      assert result.objective == 1.0
+    end
+
+    test "at_most_one allows zero" do
+      result =
+        CpSat.new()
+        |> CpSat.bool_var(:a)
+        |> CpSat.bool_var(:b)
+        |> CpSat.at_most_one([:a, :b])
+        |> CpSat.minimize(:a + :b)
+        |> CpSat.solve!()
+
+      assert result == %{status: :optimal, values: %{a: 0, b: 0}, objective: 0.0}
+    end
+
+    test "at_least_one" do
+      result =
+        CpSat.new()
+        |> CpSat.bool_var(:a)
+        |> CpSat.bool_var(:b)
+        |> CpSat.bool_var(:c)
+        |> CpSat.at_least_one([:a, :b, :c])
+        |> CpSat.minimize(:a + :b + :c)
+        |> CpSat.solve!()
+
+      assert result.status == :optimal
+      assert result.objective == 1.0
+    end
+
+    test "bool_and forces all true" do
+      result =
+        CpSat.new()
+        |> CpSat.bool_var(:a)
+        |> CpSat.bool_var(:b)
+        |> CpSat.bool_and([:a, :b])
+        |> CpSat.minimize(:a + :b)
+        |> CpSat.solve!()
+
+      assert result == %{status: :optimal, values: %{a: 1, b: 1}, objective: 2.0}
+    end
+
+    test "bool_or allows any true" do
+      result =
+        CpSat.new()
+        |> CpSat.bool_var(:a)
+        |> CpSat.bool_var(:b)
+        |> CpSat.bool_or([:a, :b])
+        |> CpSat.minimize(:a + :b)
+        |> CpSat.solve!()
+
+      assert result.status == :optimal
+      assert result.objective == 1.0
+    end
+
+    test "bool_xor requires odd number true" do
+      result =
+        CpSat.new()
+        |> CpSat.bool_var(:a)
+        |> CpSat.bool_var(:b)
+        |> CpSat.bool_xor([:a, :b])
+        |> CpSat.maximize(:a + :b)
+        |> CpSat.solve!()
+
+      assert result.status == :optimal
+      assert result.objective == 1.0
+    end
+  end
+
   describe "validation" do
     test "solve! raises on unknown variable in constraint" do
       assert_raise ArgumentError, ~r/unknown variable/, fn ->

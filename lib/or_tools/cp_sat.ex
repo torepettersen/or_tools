@@ -121,6 +121,72 @@ defmodule OrTools.CpSat do
     all_different(model, var_names)
   end
 
+  @doc "Constrains exactly one of the given boolean variables to be true."
+  def exactly_one(%__MODULE__{} = model, var_names) when is_list(var_names) do
+    %{model | constraints: model.constraints ++ [{:exactly_one, var_names}]}
+  end
+
+  @doc "Constrains exactly one, with immediate validation."
+  def exactly_one!(%__MODULE__{} = model, var_names) when is_list(var_names) do
+    validate_var_names!(model, var_names)
+    exactly_one(model, var_names)
+  end
+
+  @doc "Constrains at most one of the given boolean variables to be true."
+  def at_most_one(%__MODULE__{} = model, var_names) when is_list(var_names) do
+    %{model | constraints: model.constraints ++ [{:at_most_one, var_names}]}
+  end
+
+  @doc "Constrains at most one, with immediate validation."
+  def at_most_one!(%__MODULE__{} = model, var_names) when is_list(var_names) do
+    validate_var_names!(model, var_names)
+    at_most_one(model, var_names)
+  end
+
+  @doc "Constrains at least one of the given boolean variables to be true."
+  def at_least_one(%__MODULE__{} = model, var_names) when is_list(var_names) do
+    %{model | constraints: model.constraints ++ [{:at_least_one, var_names}]}
+  end
+
+  @doc "Constrains at least one, with immediate validation."
+  def at_least_one!(%__MODULE__{} = model, var_names) when is_list(var_names) do
+    validate_var_names!(model, var_names)
+    at_least_one(model, var_names)
+  end
+
+  @doc "Constrains the boolean AND of the given variables to be true."
+  def bool_and(%__MODULE__{} = model, var_names) when is_list(var_names) do
+    %{model | constraints: model.constraints ++ [{:bool_and, var_names}]}
+  end
+
+  @doc "Constrains boolean AND, with immediate validation."
+  def bool_and!(%__MODULE__{} = model, var_names) when is_list(var_names) do
+    validate_var_names!(model, var_names)
+    bool_and(model, var_names)
+  end
+
+  @doc "Constrains the boolean OR of the given variables to be true."
+  def bool_or(%__MODULE__{} = model, var_names) when is_list(var_names) do
+    %{model | constraints: model.constraints ++ [{:bool_or, var_names}]}
+  end
+
+  @doc "Constrains boolean OR, with immediate validation."
+  def bool_or!(%__MODULE__{} = model, var_names) when is_list(var_names) do
+    validate_var_names!(model, var_names)
+    bool_or(model, var_names)
+  end
+
+  @doc "Constrains the boolean XOR of the given variables to be true."
+  def bool_xor(%__MODULE__{} = model, var_names) when is_list(var_names) do
+    %{model | constraints: model.constraints ++ [{:bool_xor, var_names}]}
+  end
+
+  @doc "Constrains boolean XOR, with immediate validation."
+  def bool_xor!(%__MODULE__{} = model, var_names) when is_list(var_names) do
+    validate_var_names!(model, var_names)
+    bool_xor(model, var_names)
+  end
+
   @doc """
   Returns the raw term list for an expression, without a model.
 
@@ -426,7 +492,16 @@ defmodule OrTools.CpSat do
     end
   end
 
-  defp validate_constraint({:all_different, var_names}, declared) do
+  defp validate_constraint({tag, var_names}, declared)
+       when tag in [
+              :all_different,
+              :exactly_one,
+              :at_most_one,
+              :at_least_one,
+              :bool_and,
+              :bool_or,
+              :bool_xor
+            ] do
     check_var_names(var_names, declared)
   end
 

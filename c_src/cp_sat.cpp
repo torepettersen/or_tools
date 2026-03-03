@@ -101,15 +101,51 @@ std::tuple<fine::Atom, std::map<fine::Atom, int64_t>, double> solve(
     }
 
     if (arity == 2) {
-      // {:all_different, [var_names]}
       auto tag = fine::decode<fine::Atom>(env, elems[0]);
+      auto names = fine::decode<std::vector<fine::Atom>>(env, elems[1]);
+
       if (tag == "all_different") {
-        auto names = fine::decode<std::vector<fine::Atom>>(env, elems[1]);
         std::vector<or_sat::IntVar> int_vars;
         for (const auto &n : names) {
           int_vars.push_back(var_map.at(n.to_string()));
         }
         builder.AddAllDifferent(int_vars);
+      } else if (tag == "exactly_one") {
+        std::vector<or_sat::BoolVar> bools;
+        for (const auto &n : names) {
+          bools.push_back(var_map.at(n.to_string()).ToBoolVar());
+        }
+        builder.AddExactlyOne(bools);
+      } else if (tag == "at_most_one") {
+        std::vector<or_sat::BoolVar> bools;
+        for (const auto &n : names) {
+          bools.push_back(var_map.at(n.to_string()).ToBoolVar());
+        }
+        builder.AddAtMostOne(bools);
+      } else if (tag == "at_least_one") {
+        std::vector<or_sat::BoolVar> bools;
+        for (const auto &n : names) {
+          bools.push_back(var_map.at(n.to_string()).ToBoolVar());
+        }
+        builder.AddAtLeastOne(bools);
+      } else if (tag == "bool_and") {
+        std::vector<or_sat::BoolVar> bools;
+        for (const auto &n : names) {
+          bools.push_back(var_map.at(n.to_string()).ToBoolVar());
+        }
+        builder.AddBoolAnd(bools);
+      } else if (tag == "bool_or") {
+        std::vector<or_sat::BoolVar> bools;
+        for (const auto &n : names) {
+          bools.push_back(var_map.at(n.to_string()).ToBoolVar());
+        }
+        builder.AddBoolOr(bools);
+      } else if (tag == "bool_xor") {
+        std::vector<or_sat::BoolVar> bools;
+        for (const auto &n : names) {
+          bools.push_back(var_map.at(n.to_string()).ToBoolVar());
+        }
+        builder.AddBoolXor(bools);
       }
     } else if (arity == 4) {
       // {:abs_eq, target_var, [{var, coeff}, ...], constant}
