@@ -22,9 +22,12 @@ defmodule OrTools.CpSat do
       result.objective # 35.0
   """
 
+  alias OrTools.CpSat.Expr
+
   defmacro __using__(_opts) do
     quote do
       alias OrTools.CpSat
+      alias OrTools.CpSat.Expr
       require OrTools.CpSat
     end
   end
@@ -188,42 +191,35 @@ defmodule OrTools.CpSat do
   end
 
   @doc """
-  Returns the raw term list for an expression, without a model.
-
-  Useful for building expressions in variables before passing to
-  `maximize`, `minimize`, or `constrain`.
+  Builds an `%Expr{}` from a mathematical expression.
 
   ## Examples
 
-      terms = CpSat.expr(2 * :x + 3 * :y)
-      CpSat.maximize(model, sum(terms))
+      iex> CpSat.expr(2 * :x + 3 * :y)
+      #Expr<2*x + 3*y>
+
+      iex> CpSat.expr(-pow(:x + :y - 10, 2))
+      #Expr<-pow(..., 2)>
   """
   defmacro expr(expression) do
     quote_collect_terms(expression)
   end
 
   @doc """
-  Converts a list of variable names, `{name, coeff}` tuples, or expr results
-  into a flat term list at runtime.
+  Combines a list of variable names, `{name, coeff}` tuples, or `%Expr{}` structs
+  into a single `%Expr{}`.
 
   ## Examples
 
       terms = CpSat.sum(for v <- vars, do: CpSat.expr(2 * v))
       CpSat.maximize(model, terms)
   """
+  def sum(%Expr{} = expr), do: expr
+
   def sum(list) when is_list(list) do
     list
     |> List.flatten()
-    |> Enum.map(fn
-      {:__abs__, _inner, _coeff} = abs_term -> abs_term
-      {:__pow__, _inner, _exp, _coeff} = pow_term -> pow_term
-      {:__mul__, _left, _right, _coeff} = mul_term -> mul_term
-      {:__div__, _dividend, _divisor, _coeff} = div_term -> div_term
-      {:__min__, _vars, _coeff} = min_term -> min_term
-      {:__max__, _vars, _coeff} = max_term -> max_term
-      {name, coeff} when is_atom(name) and is_integer(coeff) -> {name, coeff}
-      name when is_atom(name) -> {name, 1}
-    end)
+    |> Enum.reduce(Expr.new(), fn item, acc -> Expr.add(acc, Expr.coerce(item)) end)
   end
 
   @doc "Sets the objective to maximize. Does not validate variable names."
@@ -286,20 +282,8 @@ defmodule OrTools.CpSat do
   end
 
   @doc false
-  def __negate_raw_terms__(terms) do
-    Enum.map(terms, fn
-      {:__abs__, inner, coeff} -> {:__abs__, inner, -coeff}
-      {:__pow__, inner, exp, coeff} -> {:__pow__, inner, exp, -coeff}
-      {:__mul__, left, right, coeff} -> {:__mul__, left, right, -coeff}
-      {:__div__, dividend, divisor, coeff} -> {:__div__, dividend, divisor, -coeff}
-      {:__min__, vars, coeff} -> {:__min__, vars, -coeff}
-      {:__max__, vars, coeff} -> {:__max__, vars, -coeff}
-      {v, c} -> {v, -c}
-    end)
-  end
-
-  @doc false
-  def __build_objective__(%__MODULE__{} = model, sense, raw_terms) do
+  def __build_objective__(%__MODULE__{} = model, sense, %Expr{} = expr) do
+    raw_terms = Expr.to_raw(expr)
     {model, flat_terms} = flatten_special_terms(model, raw_terms, sense)
     {vars, _const} = split_terms(flat_terms)
     set_objective(model, sense, vars)
@@ -329,35 +313,41 @@ defmodule OrTools.CpSat do
         {model, [{abs_name, coeff} | acc]}
 
       {:__pow__, base_terms, exponent, coeff}, {model, acc} ->
-        {base_vars, _base_const} = split_terms(base_terms)
+        {base_vars, base_const} = split_terms(base_terms)
 
-        # For pow we need a single variable as the base (e.g. :x, not :x + :y)
-        # We support single-variable bases only
-        [{base_var, base_coeff}] = base_vars
-
-        {lb, ub} = Map.get(var_bounds, base_var, {0, 0})
-        effective_lb = lb * base_coeff
-        effective_ub = ub * base_coeff
-
-        # Chain multiplications: x^2 = x*x, x^3 = (x*x)*x, etc.
-        # First, create a scaled base variable if coeff != 1
+        # Create an auxiliary variable equal to the base expression.
+        # If the base is already a single variable with coeff 1 and no constant, reuse it directly.
         {model, var_bounds, source_var} =
-          if base_coeff == 1 do
-            {model, var_bounds, base_var}
-          else
-            scaled_name = :"__pow_base_#{:erlang.unique_integer([:positive])}"
-            scaled_lb = min(effective_lb, effective_ub)
-            scaled_ub = max(effective_lb, effective_ub)
-            model = int_var(model, scaled_name, scaled_lb, scaled_ub)
-            var_bounds = Map.put(var_bounds, scaled_name, {scaled_lb, scaled_ub})
+          case {base_vars, base_const} do
+            {[{base_var, 1}], 0} ->
+              {model, var_bounds, base_var}
 
-            model = %{
-              model
-              | constraints:
-                  model.constraints ++ [{[{base_var, base_coeff}], :==, 0, scaled_name}]
-            }
+            _ ->
+              aux_name = :"__pow_base_#{:erlang.unique_integer([:positive])}"
 
-            {model, var_bounds, scaled_name}
+              all_extremes =
+                Enum.reduce(base_vars, [{base_const, base_const}], fn {name, c}, ranges ->
+                  {lb, ub} = Map.get(var_bounds, name, {0, 0})
+
+                  for {lo, hi} <- ranges, v <- [lb * c, ub * c] do
+                    {min(lo + v, lo), max(hi + v, hi)}
+                  end
+                end)
+
+              aux_lb = all_extremes |> Enum.map(&elem(&1, 0)) |> Enum.min()
+              aux_ub = all_extremes |> Enum.map(&elem(&1, 1)) |> Enum.max()
+
+              model = int_var(model, aux_name, aux_lb, aux_ub)
+              var_bounds = Map.put(var_bounds, aux_name, {aux_lb, aux_ub})
+
+              eq_terms = base_vars ++ [{aux_name, -1}]
+
+              model = %{
+                model
+                | constraints: model.constraints ++ [{eq_terms, :==, -base_const}]
+              }
+
+              {model, var_bounds, aux_name}
           end
 
         # Chain: aux1 = source * source, aux2 = aux1 * source, ...
@@ -626,20 +616,15 @@ defmodule OrTools.CpSat do
   # --- Runtime helpers for expression normalization ---
 
   @doc false
-  def __build_constraint__(lhs_terms, rhs_terms, op) do
-    {lhs_vars, lhs_const} = split_terms(lhs_terms)
-    {rhs_vars, rhs_const} = split_terms(rhs_terms)
+  def __build_constraint__(%Expr{} = lhs, %Expr{} = rhs, op) do
+    combined = Expr.subtract(lhs, rhs)
 
-    final_vars = merge_terms(lhs_vars, negate_terms(rhs_vars))
-    final_rhs = rhs_const - lhs_const
+    if combined.special != [] do
+      raise ArgumentError, "constraints cannot contain nonlinear terms (abs, pow, mul, div, min, max)"
+    end
 
-    {final_vars, op, final_rhs}
-  end
-
-  @doc false
-  def __build_linear_expr__(terms) do
-    {vars, _const} = split_terms(terms)
-    vars
+    final_vars = merge_terms(combined.terms)
+    {final_vars, op, -combined.const}
   end
 
   defp split_terms(terms) do
@@ -648,290 +633,207 @@ defmodule OrTools.CpSat do
     {vars, const_sum}
   end
 
-  defp negate_terms(terms) do
-    Enum.map(terms, fn {var, coeff} -> {var, -coeff} end)
-  end
-
-  defp merge_terms(a, b) do
-    (a ++ b)
+  defp merge_terms(terms) do
+    terms
     |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
     |> Enum.map(fn {var, coeffs} -> {var, Enum.sum(coeffs)} end)
     |> Enum.reject(fn {_, coeff} -> coeff == 0 end)
   end
 
-  # --- Macro helpers (compile-time AST → runtime code) ---
+  # --- Macro helpers (compile-time AST → runtime %Expr{}) ---
 
   defp parse_constraint_ast({op, _, [lhs, rhs]}) when op in [:<=, :>=, :==, :!=, :<, :>] do
     {quote_collect_terms(lhs), op, quote_collect_terms(rhs)}
   end
 
-  # Generates quoted code that evaluates to a list of {atom | :__const__, integer} terms at runtime.
+  # Addition
   defp quote_collect_terms({:+, _, [left, right]}) do
     l = quote_collect_terms(left)
     r = quote_collect_terms(right)
-    quote do: unquote(l) ++ unquote(r)
+    quote do: OrTools.CpSat.Expr.add(unquote(l), unquote(r))
   end
 
+  # Subtraction
   defp quote_collect_terms({:-, _, [left, right]}) do
     l = quote_collect_terms(left)
     r = quote_collect_terms(right)
-    quote do: unquote(l) ++ OrTools.CpSat.__negate_raw_terms__(unquote(r))
+    quote do: OrTools.CpSat.Expr.subtract(unquote(l), unquote(r))
   end
 
+  # Unary negation
   defp quote_collect_terms({:-, _, [operand]}) do
     o = quote_collect_terms(operand)
-    quote do: OrTools.CpSat.__negate_raw_terms__(unquote(o))
+    quote do: OrTools.CpSat.Expr.negate(unquote(o))
   end
 
-  # min(var_list) / max(var_list) — emits marker tuples for min/max equality
+  # min(var_list) / max(var_list)
   defp quote_collect_terms({:min, _, [arg]}) do
-    quote do: [{:__min__, unquote(arg), 1}]
+    quote do: %OrTools.CpSat.Expr{special: [{:min, unquote(arg), 1}]}
   end
 
   defp quote_collect_terms({:max, _, [arg]}) do
-    quote do: [{:__max__, unquote(arg), 1}]
+    quote do: %OrTools.CpSat.Expr{special: [{:max, unquote(arg), 1}]}
   end
 
-  # abs(expr) — emits a marker tuple that __build_objective__ will linearize
+  # abs(expr)
   defp quote_collect_terms({:abs, _, [inner]}) do
     inner_ast = quote_collect_terms(inner)
-    quote do: [{:__abs__, unquote(inner_ast), 1}]
+    quote do: %OrTools.CpSat.Expr{special: [{:abs, unquote(inner_ast), 1}]}
   end
 
-  # div(dividend, divisor) — emits a marker tuple for integer division equality
+  # div(dividend, divisor)
   defp quote_collect_terms({:div, _, [dividend, divisor]}) do
     dividend_ast = quote_collect_terms(dividend)
     divisor_ast = quote_collect_terms(divisor)
-    quote do: [{:__div__, unquote(dividend_ast), unquote(divisor_ast), 1}]
+    quote do: %OrTools.CpSat.Expr{special: [{:div, unquote(dividend_ast), unquote(divisor_ast), 1}]}
   end
 
-  # pow(expr, exponent) — emits a marker tuple for multiplication equality
+  # pow(expr, exponent)
   defp quote_collect_terms({:pow, _, [base, exp]}) when is_integer(exp) and exp >= 2 do
     base_ast = quote_collect_terms(base)
-    quote do: [{:__pow__, unquote(base_ast), unquote(exp), 1}]
+    quote do: %OrTools.CpSat.Expr{special: [{:pow, unquote(base_ast), unquote(exp), 1}]}
   end
 
-  # sum(list) — accepts a list of atoms, {atom, coeff} tuples, expr results, or marker tuples
+  # sum(list) — reduces a runtime list into a single Expr
   defp quote_collect_terms({:sum, _, [arg]}) do
-    quote do
-      Enum.flat_map(unquote(arg), fn
-        {:__abs__, _inner, _coeff} = abs_term -> [abs_term]
-        {:__pow__, _inner, _exp, _coeff} = pow_term -> [pow_term]
-        {:__mul__, _left, _right, _coeff} = mul_term -> [mul_term]
-        {:__div__, _dividend, _divisor, _coeff} = div_term -> [div_term]
-        {:__min__, _vars, _coeff} = min_term -> [min_term]
-        {:__max__, _vars, _coeff} = max_term -> [max_term]
-        {name, coeff} when is_atom(name) and is_integer(coeff) -> [{name, coeff}]
-        name when is_atom(name) -> [{name, 1}]
-        list when is_list(list) -> list
-      end)
-    end
+    quote do: OrTools.CpSat.sum(unquote(arg))
   end
 
-  # coeff * sum(list) or sum(list) * coeff — scale all terms
-  defp quote_collect_terms({:*, _, [coeff, {:sum, _, _} = sum_expr]}) when is_integer(coeff) do
+  # coeff * special_expr or special_expr * coeff — delegate to Expr.scale
+  # We handle all coeff * f(...) patterns uniformly via scale
+
+  # coeff * sum(...)
+  defp quote_collect_terms({:*, _, [coeff, {:sum, _, _} = sum_expr]}) do
     sum_ast = quote_collect_terms(sum_expr)
-
-    quote do
-      Enum.map(unquote(sum_ast), fn
-        {:__abs__, inner, c} -> {:__abs__, inner, c * unquote(coeff)}
-        {:__pow__, inner, exp, c} -> {:__pow__, inner, exp, c * unquote(coeff)}
-        {:__mul__, left, right, c} -> {:__mul__, left, right, c * unquote(coeff)}
-        {:__div__, dividend, divisor, c} -> {:__div__, dividend, divisor, c * unquote(coeff)}
-        {:__min__, vars, c} -> {:__min__, vars, c * unquote(coeff)}
-        {:__max__, vars, c} -> {:__max__, vars, c * unquote(coeff)}
-        {name, c} -> {name, c * unquote(coeff)}
-      end)
-    end
+    coeff_ast = quote_collect_terms_coeff(coeff)
+    quote do: OrTools.CpSat.Expr.scale(unquote(sum_ast), unquote(coeff_ast))
   end
 
-  defp quote_collect_terms({:*, _, [{:sum, _, _} = sum_expr, coeff]}) when is_integer(coeff) do
+  defp quote_collect_terms({:*, _, [{:sum, _, _} = sum_expr, coeff]}) do
     sum_ast = quote_collect_terms(sum_expr)
-
-    quote do
-      Enum.map(unquote(sum_ast), fn
-        {:__abs__, inner, c} -> {:__abs__, inner, c * unquote(coeff)}
-        {:__pow__, inner, exp, c} -> {:__pow__, inner, exp, c * unquote(coeff)}
-        {:__mul__, left, right, c} -> {:__mul__, left, right, c * unquote(coeff)}
-        {:__div__, dividend, divisor, c} -> {:__div__, dividend, divisor, c * unquote(coeff)}
-        {:__min__, vars, c} -> {:__min__, vars, c * unquote(coeff)}
-        {:__max__, vars, c} -> {:__max__, vars, c * unquote(coeff)}
-        {name, c} -> {name, c * unquote(coeff)}
-      end)
-    end
+    coeff_ast = quote_collect_terms_coeff(coeff)
+    quote do: OrTools.CpSat.Expr.scale(unquote(sum_ast), unquote(coeff_ast))
   end
 
-  # coeff * min(list) / coeff * max(list)
-  defp quote_collect_terms({:*, _, [coeff, {:min, _, [arg]}]}) when is_integer(coeff) do
-    quote do: [{:__min__, unquote(arg), unquote(coeff)}]
-  end
-
-  defp quote_collect_terms({:*, _, [{:min, _, [arg]}, coeff]}) when is_integer(coeff) do
-    quote do: [{:__min__, unquote(arg), unquote(coeff)}]
-  end
-
-  defp quote_collect_terms({:*, _, [coeff, {:max, _, [arg]}]}) when is_integer(coeff) do
-    quote do: [{:__max__, unquote(arg), unquote(coeff)}]
-  end
-
-  defp quote_collect_terms({:*, _, [{:max, _, [arg]}, coeff]}) when is_integer(coeff) do
-    quote do: [{:__max__, unquote(arg), unquote(coeff)}]
-  end
-
-  # runtime coeff * min/max
+  # coeff * min/max
   defp quote_collect_terms({:*, _, [coeff, {:min, _, [arg]}]}) do
-    quote do: [{:__min__, unquote(arg), unquote(coeff)}]
+    coeff_ast = quote_collect_terms_coeff(coeff)
+    quote do: %OrTools.CpSat.Expr{special: [{:min, unquote(arg), unquote(coeff_ast)}]}
   end
 
   defp quote_collect_terms({:*, _, [{:min, _, [arg]}, coeff]}) do
-    quote do: [{:__min__, unquote(arg), unquote(coeff)}]
+    coeff_ast = quote_collect_terms_coeff(coeff)
+    quote do: %OrTools.CpSat.Expr{special: [{:min, unquote(arg), unquote(coeff_ast)}]}
   end
 
   defp quote_collect_terms({:*, _, [coeff, {:max, _, [arg]}]}) do
-    quote do: [{:__max__, unquote(arg), unquote(coeff)}]
+    coeff_ast = quote_collect_terms_coeff(coeff)
+    quote do: %OrTools.CpSat.Expr{special: [{:max, unquote(arg), unquote(coeff_ast)}]}
   end
 
   defp quote_collect_terms({:*, _, [{:max, _, [arg]}, coeff]}) do
-    quote do: [{:__max__, unquote(arg), unquote(coeff)}]
+    coeff_ast = quote_collect_terms_coeff(coeff)
+    quote do: %OrTools.CpSat.Expr{special: [{:max, unquote(arg), unquote(coeff_ast)}]}
   end
 
-  # coeff * div(a, b) — scale the div marker's coefficient
-  defp quote_collect_terms({:*, _, [coeff, {:div, _, [dividend, divisor]}]})
-       when is_integer(coeff) do
-    dividend_ast = quote_collect_terms(dividend)
-    divisor_ast = quote_collect_terms(divisor)
-    quote do: [{:__div__, unquote(dividend_ast), unquote(divisor_ast), unquote(coeff)}]
-  end
-
-  defp quote_collect_terms({:*, _, [{:div, _, [dividend, divisor]}, coeff]})
-       when is_integer(coeff) do
-    dividend_ast = quote_collect_terms(dividend)
-    divisor_ast = quote_collect_terms(divisor)
-    quote do: [{:__div__, unquote(dividend_ast), unquote(divisor_ast), unquote(coeff)}]
-  end
-
-  # runtime_coeff * div(a, b)
+  # coeff * div(a, b)
   defp quote_collect_terms({:*, _, [coeff, {:div, _, [dividend, divisor]}]}) do
     dividend_ast = quote_collect_terms(dividend)
     divisor_ast = quote_collect_terms(divisor)
-    quote do: [{:__div__, unquote(dividend_ast), unquote(divisor_ast), unquote(coeff)}]
+    coeff_ast = quote_collect_terms_coeff(coeff)
+    quote do: %OrTools.CpSat.Expr{special: [{:div, unquote(dividend_ast), unquote(divisor_ast), unquote(coeff_ast)}]}
   end
 
   defp quote_collect_terms({:*, _, [{:div, _, [dividend, divisor]}, coeff]}) do
     dividend_ast = quote_collect_terms(dividend)
     divisor_ast = quote_collect_terms(divisor)
-    quote do: [{:__div__, unquote(dividend_ast), unquote(divisor_ast), unquote(coeff)}]
+    coeff_ast = quote_collect_terms_coeff(coeff)
+    quote do: %OrTools.CpSat.Expr{special: [{:div, unquote(dividend_ast), unquote(divisor_ast), unquote(coeff_ast)}]}
   end
 
-  # coeff * pow(expr, n) — scale the pow marker's coefficient
-  defp quote_collect_terms({:*, _, [coeff, {:pow, _, [base, exp]}]})
-       when is_integer(coeff) and is_integer(exp) and exp >= 2 do
-    base_ast = quote_collect_terms(base)
-    quote do: [{:__pow__, unquote(base_ast), unquote(exp), unquote(coeff)}]
-  end
-
-  defp quote_collect_terms({:*, _, [{:pow, _, [base, exp]}, coeff]})
-       when is_integer(coeff) and is_integer(exp) and exp >= 2 do
-    base_ast = quote_collect_terms(base)
-    quote do: [{:__pow__, unquote(base_ast), unquote(exp), unquote(coeff)}]
-  end
-
-  # runtime_coeff * pow(expr, n)
+  # coeff * pow(base, exp)
   defp quote_collect_terms({:*, _, [coeff, {:pow, _, [base, exp]}]})
        when is_integer(exp) and exp >= 2 do
     base_ast = quote_collect_terms(base)
-    quote do: [{:__pow__, unquote(base_ast), unquote(exp), unquote(coeff)}]
+    coeff_ast = quote_collect_terms_coeff(coeff)
+    quote do: %OrTools.CpSat.Expr{special: [{:pow, unquote(base_ast), unquote(exp), unquote(coeff_ast)}]}
   end
 
   defp quote_collect_terms({:*, _, [{:pow, _, [base, exp]}, coeff]})
        when is_integer(exp) and exp >= 2 do
     base_ast = quote_collect_terms(base)
-    quote do: [{:__pow__, unquote(base_ast), unquote(exp), unquote(coeff)}]
+    coeff_ast = quote_collect_terms_coeff(coeff)
+    quote do: %OrTools.CpSat.Expr{special: [{:pow, unquote(base_ast), unquote(exp), unquote(coeff_ast)}]}
   end
 
-  # coeff * abs(expr) — scale the abs marker's coefficient
-  defp quote_collect_terms({:*, _, [coeff, {:abs, _, [inner]}]}) when is_integer(coeff) do
-    inner_ast = quote_collect_terms(inner)
-    quote do: [{:__abs__, unquote(inner_ast), unquote(coeff)}]
-  end
-
-  defp quote_collect_terms({:*, _, [{:abs, _, [inner]}, coeff]}) when is_integer(coeff) do
-    inner_ast = quote_collect_terms(inner)
-    quote do: [{:__abs__, unquote(inner_ast), unquote(coeff)}]
-  end
-
-  # runtime_coeff * abs(expr) — coeff is a runtime expression
+  # coeff * abs(expr)
   defp quote_collect_terms({:*, _, [coeff, {:abs, _, [inner]}]}) do
     inner_ast = quote_collect_terms(inner)
-    quote do: [{:__abs__, unquote(inner_ast), unquote(coeff)}]
+    coeff_ast = quote_collect_terms_coeff(coeff)
+    quote do: %OrTools.CpSat.Expr{special: [{:abs, unquote(inner_ast), unquote(coeff_ast)}]}
   end
 
   defp quote_collect_terms({:*, _, [{:abs, _, [inner]}, coeff]}) do
     inner_ast = quote_collect_terms(inner)
-    quote do: [{:__abs__, unquote(inner_ast), unquote(coeff)}]
+    coeff_ast = quote_collect_terms_coeff(coeff)
+    quote do: %OrTools.CpSat.Expr{special: [{:abs, unquote(inner_ast), unquote(coeff_ast)}]}
   end
 
-  # var * var where both are literal atoms — nonlinear multiplication
+  # var * var — nonlinear multiplication
   defp quote_collect_terms({:*, _, [left, right]}) when is_atom(left) and is_atom(right) do
-    Macro.escape([{:__mul__, [{left, 1}], [{right, 1}], 1}])
+    left_expr = Macro.escape(%Expr{terms: [{left, 1}]})
+    right_expr = Macro.escape(%Expr{terms: [{right, 1}]})
+    quote do: %OrTools.CpSat.Expr{special: [{:mul, unquote(left_expr), unquote(right_expr), 1}]}
   end
 
-  # coeff * var where both are literals
+  # coeff * var — both literals
   defp quote_collect_terms({:*, _, [coeff, var]}) when is_integer(coeff) and is_atom(var) do
-    [{var, coeff}]
+    Macro.escape(%Expr{terms: [{var, coeff}]})
   end
 
-  # var * coeff where both are literals
+  # var * coeff — both literals
   defp quote_collect_terms({:*, _, [var, coeff]}) when is_atom(var) and is_integer(coeff) do
-    [{var, coeff}]
+    Macro.escape(%Expr{terms: [{var, coeff}]})
   end
 
   # coeff * expr or expr * coeff — at least one side is a runtime expression
   defp quote_collect_terms({:*, _, [left, right]}) do
     cond do
       is_integer(left) ->
-        # left is a literal integer, right is a runtime expression (variable name)
-        quote do: [{unquote(right), unquote(left)}]
+        quote do: OrTools.CpSat.Expr.scale(OrTools.CpSat.Expr.from_runtime(unquote(right)), unquote(left))
 
       is_integer(right) ->
-        # right is a literal integer, left is a runtime expression (variable name)
-        quote do: [{unquote(left), unquote(right)}]
+        quote do: OrTools.CpSat.Expr.scale(OrTools.CpSat.Expr.from_runtime(unquote(left)), unquote(right))
 
       is_atom(left) ->
-        # left is a literal atom, right could be a runtime var or coefficient
+        left_expr = Macro.escape(%Expr{terms: [{left, 1}]})
         quote do
           r_val = unquote(right)
-
           if is_atom(r_val),
-            do: [{:__mul__, [{unquote(left), 1}], [{r_val, 1}], 1}],
-            else: [{unquote(left), r_val}]
+            do: %OrTools.CpSat.Expr{special: [{:mul, unquote(left_expr), OrTools.CpSat.Expr.var(r_val), 1}]},
+            else: OrTools.CpSat.Expr.scale(unquote(left_expr), r_val)
         end
 
       is_atom(right) ->
-        # right is a literal atom, left could be a runtime var or coefficient
+        right_expr = Macro.escape(%Expr{terms: [{right, 1}]})
         quote do
           l_val = unquote(left)
-
           if is_atom(l_val),
-            do: [{:__mul__, [{l_val, 1}], [{unquote(right), 1}], 1}],
-            else: [{unquote(right), l_val}]
+            do: %OrTools.CpSat.Expr{special: [{:mul, OrTools.CpSat.Expr.var(l_val), unquote(right_expr), 1}]},
+            else: OrTools.CpSat.Expr.scale(unquote(right_expr), l_val)
         end
 
       true ->
-        # Both sides are runtime expressions
         quote do
           l_val = unquote(left)
           r_val = unquote(right)
-
           cond do
             is_atom(l_val) and is_atom(r_val) ->
-              [{:__mul__, [{l_val, 1}], [{r_val, 1}], 1}]
-
+              %OrTools.CpSat.Expr{special: [{:mul, OrTools.CpSat.Expr.var(l_val), OrTools.CpSat.Expr.var(r_val), 1}]}
             is_atom(l_val) ->
-              [{l_val, r_val}]
-
+              OrTools.CpSat.Expr.scale(OrTools.CpSat.Expr.var(l_val), r_val)
             true ->
-              [{r_val, l_val}]
+              OrTools.CpSat.Expr.scale(OrTools.CpSat.Expr.var(r_val), l_val)
           end
         end
     end
@@ -939,22 +841,20 @@ defmodule OrTools.CpSat do
 
   # Literal atom (e.g. :x)
   defp quote_collect_terms(var) when is_atom(var) do
-    [{var, 1}]
+    Macro.escape(%Expr{terms: [{var, 1}]})
   end
 
   # Literal integer (e.g. 50)
   defp quote_collect_terms(int) when is_integer(int) do
-    [{:__const__, int}]
+    Macro.escape(%Expr{const: int})
   end
 
-  # Runtime expression — could be a variable name (atom), a constant (integer), or a term list
+  # Runtime expression — could be a variable name (atom), a constant (integer), or an Expr
   defp quote_collect_terms(other) do
-    quote do
-      case unquote(other) do
-        val when is_atom(val) -> [{val, 1}]
-        val when is_integer(val) -> [{:__const__, val}]
-        val when is_list(val) -> val
-      end
-    end
+    quote do: OrTools.CpSat.Expr.from_runtime(unquote(other))
   end
+
+  # Helper: extract coefficient value from AST (literal int or runtime expression)
+  defp quote_collect_terms_coeff(coeff) when is_integer(coeff), do: coeff
+  defp quote_collect_terms_coeff(coeff), do: coeff
 end

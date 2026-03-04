@@ -424,6 +424,52 @@ defmodule OrTools.CpSatTest do
 
       assert Map.keys(result.values) == [:x]
     end
+
+    test "pow with multi-variable expression" do
+      # minimize (x + y - 10)^2 → solver should pick x + y = 10
+      result =
+        CpSat.new()
+        |> CpSat.int_var(:x, 0..10)
+        |> CpSat.int_var(:y, 0..10)
+        |> CpSat.minimize(pow(:x + :y - 10, 2))
+        |> CpSat.solve!()
+
+      assert result.status == :optimal
+      assert result.values.x + result.values.y == 10
+      assert result.objective == 0.0
+    end
+
+    test "pow with weighted multi-variable expression" do
+      # minimize (2*x + 3*y - 20)^2
+      result =
+        CpSat.new()
+        |> CpSat.int_var(:x, 0..10)
+        |> CpSat.int_var(:y, 0..10)
+        |> CpSat.minimize(pow(2 * :x + 3 * :y - 20, 2))
+        |> CpSat.solve!()
+
+      assert result.status == :optimal
+      assert 2 * result.values.x + 3 * result.values.y == 20
+      assert result.objective == 0.0
+    end
+
+    test "weighted sum of runtime pow expressions" do
+      # Simulates the soft constraint pattern: weight * score_function()
+      # where score_function returns a list with __pow__ terms
+      score = fn ->
+        CpSat.sum([CpSat.expr(-pow(:x + :y - 10, 2))])
+      end
+
+      result =
+        CpSat.new()
+        |> CpSat.int_var(:x, 0..10)
+        |> CpSat.int_var(:y, 0..10)
+        |> CpSat.maximize(1000 * score.() + :x)
+        |> CpSat.solve!()
+
+      assert result.status == :optimal
+      assert result.values.x + result.values.y == 10
+    end
   end
 
   describe "min/max" do
