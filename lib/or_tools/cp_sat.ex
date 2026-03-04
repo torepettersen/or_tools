@@ -44,6 +44,12 @@ defmodule OrTools.CpSat do
     %{model | vars: model.vars ++ [{name, 0, 1}]}
   end
 
+  @doc "Adds boolean (0/1) variables for each name in the list."
+  def bool_vars(%__MODULE__{} = model, names) when is_list(names) do
+    new_vars = Enum.map(names, fn name when is_atom(name) -> {name, 0, 1} end)
+    %{model | vars: model.vars ++ new_vars}
+  end
+
   @doc "Adds an integer variable with the given name and range."
   def int_var(%__MODULE__{} = model, name, %Range{first: lb, last: ub}) when is_atom(name) do
     %{model | vars: model.vars ++ [{name, lb, ub}]}
@@ -51,6 +57,30 @@ defmodule OrTools.CpSat do
 
   def int_var(%__MODULE__{} = model, name, lb, ub) when is_atom(name) do
     %{model | vars: model.vars ++ [{name, lb, ub}]}
+  end
+
+  @doc "Adds integer variables with the given range for each name in the list."
+  def int_vars(%__MODULE__{} = model, names, %Range{first: lb, last: ub}) when is_list(names) do
+    new_vars = Enum.map(names, fn name when is_atom(name) -> {name, lb, ub} end)
+    %{model | vars: model.vars ++ new_vars}
+  end
+
+  @doc """
+  Builds a constraint without adding it to a model.
+
+  Use with `into:` to collect constraints into a model:
+
+      for shift <- shifts, into: model do
+        assignments = Enum.map(employees, fn emp -> var_name(emp, shift) end)
+        CpSat.constraint(sum(assignments) <= 1)
+      end
+  """
+  defmacro constraint(expr) do
+    {lhs_ast, op, rhs_ast} = parse_constraint_ast(expr)
+
+    quote do
+      OrTools.CpSat.__build_constraint__(unquote(lhs_ast), unquote(rhs_ast), unquote(op))
+    end
   end
 
   @doc """
@@ -205,21 +235,13 @@ defmodule OrTools.CpSat do
   end
 
   @doc """
-  Combines a list of variable names, `{name, coeff}` tuples, or `%Expr{}` structs
-  into a single `%Expr{}`.
+  Returns a zero expression. Use with `into:` to collect expressions:
 
-  ## Examples
-
-      terms = CpSat.sum(for v <- vars, do: CpSat.expr(2 * v))
-      CpSat.maximize(model, terms)
+      for emp <- employees, into: CpSat.expr() do
+        score(model, emp)
+      end
   """
-  def sum(%Expr{} = expr), do: expr
-
-  def sum(list) when is_list(list) do
-    list
-    |> List.flatten()
-    |> Enum.reduce(Expr.new(), fn item, acc -> Expr.add(acc, Expr.new(item)) end)
-  end
+  def expr, do: %Expr{}
 
   @doc "Sets the objective to maximize. Does not validate variable names."
   defmacro maximize(model, expr) do
@@ -676,7 +698,7 @@ defmodule OrTools.CpSat do
 
   # sum(list) — reduces a runtime list into a single Expr
   defp quote_collect_terms({:sum, _, [arg]}) do
-    quote do: OrTools.CpSat.sum(unquote(arg))
+    quote do: OrTools.CpSat.Expr.sum(unquote(arg))
   end
 
   # coeff * special_expr or special_expr * coeff — delegate to Expr.scale
@@ -837,4 +859,16 @@ defmodule OrTools.CpSat do
   # Helper: extract coefficient value from AST (literal int or runtime expression)
   defp quote_collect_terms_coeff(coeff) when is_integer(coeff), do: coeff
   defp quote_collect_terms_coeff(coeff), do: coeff
+
+  defimpl Collectable do
+    def into(model) do
+      fun = fn
+        acc, {:cont, {terms, op, rhs}} -> OrTools.CpSat.add_constraint(acc, terms, op, rhs)
+        acc, :done -> acc
+        _acc, :halt -> :ok
+      end
+
+      {model, fun}
+    end
+  end
 end

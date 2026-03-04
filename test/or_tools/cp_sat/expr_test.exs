@@ -99,4 +99,28 @@ defmodule OrTools.CpSat.ExprTest do
       assert inspect(Expr.new(42)) == "#Expr<42>"
     end
   end
+
+  describe "collectable" do
+    test "for comprehension with into" do
+      result = for v <- [:x, :y, :z], into: %Expr{}, do: Expr.new(v)
+      assert result.terms == [{:x, 1}, {:y, 1}, {:z, 1}]
+    end
+
+    test "for comprehension with scaled terms" do
+      result =
+        for {v, c} <- [x: 2, y: 3], into: %Expr{} do
+          Expr.new({v, c})
+        end
+
+      assert result.terms == [{:x, 2}, {:y, 3}]
+    end
+
+    test "collects Expr values" do
+      a = %Expr{terms: [{:x, 1}], const: 5}
+      b = %Expr{terms: [{:y, 2}], const: 3}
+      result = for e <- [a, b], into: %Expr{}, do: e
+      assert result.terms == [{:x, 1}, {:y, 2}]
+      assert result.const == 8
+    end
+  end
 end

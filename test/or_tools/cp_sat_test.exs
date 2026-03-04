@@ -107,6 +107,28 @@ defmodule OrTools.CpSatTest do
       assert result == %{status: :optimal, values: %{x: 1}, objective: 1.0}
     end
 
+    test "constraint/1 with for into: model" do
+      vars = [:x, :y, :z]
+
+      model =
+        CpSat.new()
+        |> CpSat.int_var(:x, 0..10)
+        |> CpSat.int_var(:y, 0..10)
+        |> CpSat.int_var(:z, 0..10)
+
+      model =
+        for var <- vars, into: model do
+          CpSat.constraint(var <= 5)
+        end
+
+      result =
+        model
+        |> CpSat.maximize(:x + :y + :z)
+        |> CpSat.solve!()
+
+      assert result == %{status: :optimal, values: %{x: 5, y: 5, z: 5}, objective: 15.0}
+    end
+
     test "weighted linear constraint" do
       result =
         CpSat.new()
@@ -259,9 +281,11 @@ defmodule OrTools.CpSatTest do
       assert result == %{status: :optimal, values: %{x: 10, y: 10, z: 0}, objective: 40.0}
     end
 
-    test "CpSat.sum/1 collects expr results at runtime" do
-      expressions = Enum.map([:x, :y, :z], fn v -> CpSat.expr(3 * v) end)
-      terms = CpSat.sum(expressions)
+    test "Enum.reduce with CpSat.expr() collects expr results at runtime" do
+      terms =
+        Enum.reduce([:x, :y, :z], CpSat.expr(), fn v, acc ->
+          CpSat.expr(acc + 3 * v)
+        end)
 
       result =
         CpSat.new()
@@ -457,7 +481,7 @@ defmodule OrTools.CpSatTest do
       # Simulates the soft constraint pattern: weight * score_function()
       # where score_function returns a list with __pow__ terms
       score = fn ->
-        CpSat.sum([CpSat.expr(-pow(:x + :y - 10, 2))])
+        CpSat.expr(-pow(:x + :y - 10, 2))
       end
 
       result =

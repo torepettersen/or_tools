@@ -6,11 +6,11 @@ defmodule OrTools.CpSat.Expr do
   special non-linear terms (abs, pow, mul, div, min, max) that will be
   linearized when building constraints or objectives.
 
-  Created via `CpSat.expr/1` and `CpSat.sum/1`. Composable at runtime:
+  Created via `CpSat.expr/1`. Composable at runtime:
 
       score = CpSat.expr(2 * :x + 3 * :y)
       penalty = CpSat.expr(-pow(:z, 2))
-      total = CpSat.sum([score, penalty])
+      total = CpSat.expr(score + penalty)
   """
 
   defstruct terms: [], const: 0, special: []
@@ -50,6 +50,15 @@ defmodule OrTools.CpSat.Expr do
   @doc false
   def subtract(%__MODULE__{} = a, %__MODULE__{} = b) do
     add(a, negate(b))
+  end
+
+  @doc false
+  def sum(%__MODULE__{} = expr), do: expr
+
+  def sum(list) when is_list(list) do
+    list
+    |> List.flatten()
+    |> Enum.reduce(%__MODULE__{}, fn item, acc -> add(acc, new(item)) end)
   end
 
   @doc false
@@ -123,6 +132,18 @@ defmodule OrTools.CpSat.Expr do
         {{c, label}, _} when c > 0 -> " + #{c}*#{label || ""}" |> String.trim_trailing("*")
         {{c, label}, _} -> " - #{abs(c)}*#{label || ""}" |> String.trim_trailing("*")
       end)
+    end
+  end
+
+  defimpl Collectable do
+    def into(expr) do
+      fun = fn
+        acc, {:cont, item} -> OrTools.CpSat.Expr.add(acc, OrTools.CpSat.Expr.new(item))
+        acc, :done -> acc
+        _acc, :halt -> :ok
+      end
+
+      {expr, fun}
     end
   end
 end
