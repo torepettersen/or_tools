@@ -283,42 +283,39 @@ defmodule OrTools.CpSat do
 
   @doc false
   def __build_objective__(%__MODULE__{} = model, sense, %Expr{} = expr) do
-    raw_terms = Expr.to_raw(expr)
-    {model, flat_terms} = flatten_special_terms(model, raw_terms, sense)
-    {vars, _const} = split_terms(flat_terms)
+    {model, linear_terms} = flatten_expr(model, expr)
+    vars = merge_terms(linear_terms)
     set_objective(model, sense, vars)
   end
 
-  defp flatten_special_terms(model, terms, _sense) do
+  # Linearizes an %Expr{} into {model, [{atom, int}]} by converting special terms
+  # into auxiliary variables and constraints.
+  defp flatten_expr(model, %Expr{terms: terms, const: _const, special: special}) do
     var_bounds = Map.new(model.vars, fn {name, lb, ub} -> {name, {lb, ub}} end)
 
-    Enum.reduce(terms, {model, []}, fn
-      {:__abs__, inner_terms, coeff}, {model, acc} ->
+    Enum.reduce(special, {model, terms}, fn
+      {:abs, %Expr{} = inner, coeff}, {model, acc} ->
         abs_name = :"__abs_#{:erlang.unique_integer([:positive])}"
-        {inner_vars, inner_const} = split_terms(inner_terms)
 
         max_bound =
-          Enum.sum_by(inner_vars, fn {name, c} ->
+          Enum.sum_by(inner.terms, fn {name, c} ->
             {lb, ub} = Map.get(var_bounds, name, {0, 0})
             max(abs(lb * c), abs(ub * c))
-          end) + abs(inner_const)
+          end) + abs(inner.const)
 
         model = int_var(model, abs_name, 0, max_bound)
 
         model = %{
           model
-          | constraints: model.constraints ++ [{:abs_eq, abs_name, inner_vars, inner_const}]
+          | constraints: model.constraints ++ [{:abs_eq, abs_name, inner.terms, inner.const}]
         }
 
         {model, [{abs_name, coeff} | acc]}
 
-      {:__pow__, base_terms, exponent, coeff}, {model, acc} ->
-        {base_vars, base_const} = split_terms(base_terms)
-
-        # Create an auxiliary variable equal to the base expression.
-        # If the base is already a single variable with coeff 1 and no constant, reuse it directly.
+      {:pow, %Expr{} = base, exponent, coeff}, {model, acc} ->
+        # If the base is a single variable with coeff 1 and no constant, reuse it directly.
         {model, var_bounds, source_var} =
-          case {base_vars, base_const} do
+          case {base.terms, base.const} do
             {[{base_var, 1}], 0} ->
               {model, var_bounds, base_var}
 
@@ -326,7 +323,7 @@ defmodule OrTools.CpSat do
               aux_name = :"__pow_base_#{:erlang.unique_integer([:positive])}"
 
               all_extremes =
-                Enum.reduce(base_vars, [{base_const, base_const}], fn {name, c}, ranges ->
+                Enum.reduce(base.terms, [{base.const, base.const}], fn {name, c}, ranges ->
                   {lb, ub} = Map.get(var_bounds, name, {0, 0})
 
                   for {lo, hi} <- ranges, v <- [lb * c, ub * c] do
@@ -340,11 +337,11 @@ defmodule OrTools.CpSat do
               model = int_var(model, aux_name, aux_lb, aux_ub)
               var_bounds = Map.put(var_bounds, aux_name, {aux_lb, aux_ub})
 
-              eq_terms = base_vars ++ [{aux_name, -1}]
+              eq_terms = base.terms ++ [{aux_name, -1}]
 
               model = %{
                 model
-                | constraints: model.constraints ++ [{eq_terms, :==, -base_const}]
+                | constraints: model.constraints ++ [{eq_terms, :==, -base.const}]
               }
 
               {model, var_bounds, aux_name}
@@ -380,9 +377,9 @@ defmodule OrTools.CpSat do
 
         {model, [{result_var, coeff} | acc]}
 
-      {:__mul__, left_terms, right_terms, coeff}, {model, acc} ->
-        [{left_var, 1}] = elem(split_terms(left_terms), 0)
-        [{right_var, 1}] = elem(split_terms(right_terms), 0)
+      {:mul, %Expr{} = left, %Expr{} = right, coeff}, {model, acc} ->
+        [{left_var, 1}] = left.terms
+        [{right_var, 1}] = right.terms
 
         {lb_l, ub_l} = Map.get(var_bounds, left_var, {0, 0})
         {lb_r, ub_r} = Map.get(var_bounds, right_var, {0, 0})
@@ -398,12 +395,8 @@ defmodule OrTools.CpSat do
 
         {model, [{mul_name, coeff} | acc]}
 
-      {:__min__, var_names, coeff}, {model, acc} ->
-        bounds =
-          Enum.map(var_names, fn name ->
-            {lb, ub} = Map.get(var_bounds, name, {0, 0})
-            {lb, ub}
-          end)
+      {:min, var_names, coeff}, {model, acc} ->
+        bounds = Enum.map(var_names, fn name -> Map.get(var_bounds, name, {0, 0}) end)
 
         min_name = :"__min_#{:erlang.unique_integer([:positive])}"
 
@@ -422,11 +415,8 @@ defmodule OrTools.CpSat do
 
         {model, [{min_name, coeff} | acc]}
 
-      {:__max__, var_names, coeff}, {model, acc} ->
-        bounds =
-          Enum.map(var_names, fn name ->
-            Map.get(var_bounds, name, {0, 0})
-          end)
+      {:max, var_names, coeff}, {model, acc} ->
+        bounds = Enum.map(var_names, fn name -> Map.get(var_bounds, name, {0, 0}) end)
 
         max_name = :"__max_#{:erlang.unique_integer([:positive])}"
 
@@ -445,9 +435,9 @@ defmodule OrTools.CpSat do
 
         {model, [{max_name, coeff} | acc]}
 
-      {:__div__, dividend_terms, divisor_terms, coeff}, {model, acc} ->
-        [{dividend_var, 1}] = elem(split_terms(dividend_terms), 0)
-        [{divisor_var, 1}] = elem(split_terms(divisor_terms), 0)
+      {:div, %Expr{} = dividend, %Expr{} = divisor, coeff}, {model, acc} ->
+        [{dividend_var, 1}] = dividend.terms
+        [{divisor_var, 1}] = divisor.terms
 
         {lb_n, ub_n} = Map.get(var_bounds, dividend_var, {0, 0})
         {lb_d, ub_d} = Map.get(var_bounds, divisor_var, {1, 1})
@@ -464,9 +454,6 @@ defmodule OrTools.CpSat do
         }
 
         {model, [{div_name, coeff} | acc]}
-
-      term, {model, acc} ->
-        {model, [term | acc]}
     end)
   end
 
@@ -625,12 +612,6 @@ defmodule OrTools.CpSat do
 
     final_vars = merge_terms(combined.terms)
     {final_vars, op, -combined.const}
-  end
-
-  defp split_terms(terms) do
-    {consts, vars} = Enum.split_with(terms, fn {name, _} -> name == :__const__ end)
-    const_sum = consts |> Enum.map(&elem(&1, 1)) |> Enum.sum()
-    {vars, const_sum}
   end
 
   defp merge_terms(terms) do

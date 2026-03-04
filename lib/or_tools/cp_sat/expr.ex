@@ -95,99 +95,13 @@ defmodule OrTools.CpSat.Expr do
     do: %__MODULE__{terms: [{name, coeff}]}
 
   @doc """
-  Converts a runtime value (atom, integer, Expr, or legacy term list) into an Expr.
+  Converts a runtime value (atom, integer, or Expr) into an Expr.
 
   Used in macro-generated code to handle values whose type is unknown at compile time.
   """
   def from_runtime(%__MODULE__{} = expr), do: expr
   def from_runtime(name) when is_atom(name), do: var(name)
   def from_runtime(value) when is_integer(value), do: const(value)
-  def from_runtime(list) when is_list(list), do: from_raw(list)
-
-  @doc """
-  Converts from old raw term list format to Expr.
-
-  Handles: `[{atom, int}]`, `[{:__pow__, ...}]`, etc.
-  """
-  def from_raw(terms) when is_list(terms) do
-    Enum.reduce(terms, new(), fn
-      {:__abs__, inner, coeff}, acc ->
-        inner_expr = from_raw(inner)
-        %{acc | special: acc.special ++ [{:abs, inner_expr, coeff}]}
-
-      {:__pow__, base, exp, coeff}, acc ->
-        base_expr = from_raw(base)
-        %{acc | special: acc.special ++ [{:pow, base_expr, exp, coeff}]}
-
-      {:__mul__, left, right, coeff}, acc ->
-        left_expr = from_raw(left)
-        right_expr = from_raw(right)
-        %{acc | special: acc.special ++ [{:mul, left_expr, right_expr, coeff}]}
-
-      {:__div__, dividend, divisor, coeff}, acc ->
-        dividend_expr = from_raw(dividend)
-        divisor_expr = from_raw(divisor)
-        %{acc | special: acc.special ++ [{:div, dividend_expr, divisor_expr, coeff}]}
-
-      {:__min__, vars, coeff}, acc ->
-        %{acc | special: acc.special ++ [{:min, vars, coeff}]}
-
-      {:__max__, vars, coeff}, acc ->
-        %{acc | special: acc.special ++ [{:max, vars, coeff}]}
-
-      {:__const__, value}, acc ->
-        %{acc | const: acc.const + value}
-
-      {name, coeff}, acc when is_atom(name) and is_integer(coeff) ->
-        %{acc | terms: acc.terms ++ [{name, coeff}]}
-
-      name, acc when is_atom(name) ->
-        %{acc | terms: acc.terms ++ [{name, 1}]}
-    end)
-  end
-
-  @doc """
-  Converts an Expr back to the old raw term list format.
-
-  Used at the boundary with flatten_special_terms and the NIF.
-  """
-  def to_raw(%__MODULE__{terms: terms, const: const, special: special}) do
-    linear =
-      terms ++
-        if(const != 0, do: [{:__const__, const}], else: [])
-
-    special_raw =
-      Enum.map(special, fn
-        {:abs, inner, coeff} ->
-          {:__abs__, to_raw_linear(inner), coeff}
-
-        {:pow, base, exp, coeff} ->
-          {:__pow__, to_raw_linear(base), exp, coeff}
-
-        {:mul, left, right, coeff} ->
-          {:__mul__, to_raw_linear(left), to_raw_linear(right), coeff}
-
-        {:div, dividend, divisor, coeff} ->
-          {:__div__, to_raw_linear(dividend), to_raw_linear(divisor), coeff}
-
-        {:min, vars, coeff} ->
-          {:__min__, vars, coeff}
-
-        {:max, vars, coeff} ->
-          {:__max__, vars, coeff}
-      end)
-
-    linear ++ special_raw
-  end
-
-  # Converts an Expr to raw terms including constants as {:__const__, value}
-  defp to_raw_linear(%__MODULE__{terms: terms, const: const, special: []}) do
-    terms ++ if(const != 0, do: [{:__const__, const}], else: [])
-  end
-
-  defp to_raw_linear(%__MODULE__{} = expr) do
-    to_raw(expr)
-  end
 
   defimpl Inspect do
     import Inspect.Algebra

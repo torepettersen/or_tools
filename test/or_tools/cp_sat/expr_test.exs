@@ -93,40 +93,6 @@ defmodule OrTools.CpSat.ExprTest do
     test "handles integer" do
       assert Expr.from_runtime(42) == Expr.const(42)
     end
-
-    test "handles legacy term list" do
-      result = Expr.from_runtime([{:x, 2}, {:y, 3}])
-      assert result.terms == [{:x, 2}, {:y, 3}]
-    end
-  end
-
-  describe "to_raw" do
-    test "converts linear terms" do
-      expr = %Expr{terms: [{:x, 2}, {:y, 3}]}
-      assert Expr.to_raw(expr) == [{:x, 2}, {:y, 3}]
-    end
-
-    test "includes constant as __const__" do
-      expr = %Expr{terms: [{:x, 2}], const: 5}
-      assert Expr.to_raw(expr) == [{:x, 2}, {:__const__, 5}]
-    end
-
-    test "omits zero constant" do
-      expr = %Expr{terms: [{:x, 2}], const: 0}
-      assert Expr.to_raw(expr) == [{:x, 2}]
-    end
-
-    test "converts abs special" do
-      inner = %Expr{terms: [{:x, 1}]}
-      expr = %Expr{special: [{:abs, inner, 3}]}
-      assert [{:__abs__, [{:x, 1}], 3}] = Expr.to_raw(expr)
-    end
-
-    test "converts pow special" do
-      base = %Expr{terms: [{:x, 1}, {:y, -1}], const: -10}
-      expr = %Expr{special: [{:pow, base, 2, -1}]}
-      assert [{:__pow__, [{:x, 1}, {:y, -1}, {:__const__, -10}], 2, -1}] = Expr.to_raw(expr)
-    end
   end
 
   describe "inspect" do
