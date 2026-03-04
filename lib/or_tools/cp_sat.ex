@@ -27,7 +27,6 @@ defmodule OrTools.CpSat do
   defmacro __using__(_opts) do
     quote do
       alias OrTools.CpSat
-      alias OrTools.CpSat.Expr
       require OrTools.CpSat
     end
   end
@@ -219,7 +218,7 @@ defmodule OrTools.CpSat do
   def sum(list) when is_list(list) do
     list
     |> List.flatten()
-    |> Enum.reduce(Expr.new(), fn item, acc -> Expr.add(acc, Expr.coerce(item)) end)
+    |> Enum.reduce(Expr.new(), fn item, acc -> Expr.add(acc, Expr.new(item)) end)
   end
 
   @doc "Sets the objective to maximize. Does not validate variable names."
@@ -781,17 +780,17 @@ defmodule OrTools.CpSat do
   defp quote_collect_terms({:*, _, [left, right]}) do
     cond do
       is_integer(left) ->
-        quote do: OrTools.CpSat.Expr.scale(OrTools.CpSat.Expr.from_runtime(unquote(right)), unquote(left))
+        quote do: OrTools.CpSat.Expr.scale(OrTools.CpSat.Expr.new(unquote(right)), unquote(left))
 
       is_integer(right) ->
-        quote do: OrTools.CpSat.Expr.scale(OrTools.CpSat.Expr.from_runtime(unquote(left)), unquote(right))
+        quote do: OrTools.CpSat.Expr.scale(OrTools.CpSat.Expr.new(unquote(left)), unquote(right))
 
       is_atom(left) ->
         left_expr = Macro.escape(%Expr{terms: [{left, 1}]})
         quote do
           r_val = unquote(right)
           if is_atom(r_val),
-            do: %OrTools.CpSat.Expr{special: [{:mul, unquote(left_expr), OrTools.CpSat.Expr.var(r_val), 1}]},
+            do: %OrTools.CpSat.Expr{special: [{:mul, unquote(left_expr), OrTools.CpSat.Expr.new(r_val), 1}]},
             else: OrTools.CpSat.Expr.scale(unquote(left_expr), r_val)
         end
 
@@ -800,7 +799,7 @@ defmodule OrTools.CpSat do
         quote do
           l_val = unquote(left)
           if is_atom(l_val),
-            do: %OrTools.CpSat.Expr{special: [{:mul, OrTools.CpSat.Expr.var(l_val), unquote(right_expr), 1}]},
+            do: %OrTools.CpSat.Expr{special: [{:mul, OrTools.CpSat.Expr.new(l_val), unquote(right_expr), 1}]},
             else: OrTools.CpSat.Expr.scale(unquote(right_expr), l_val)
         end
 
@@ -810,11 +809,11 @@ defmodule OrTools.CpSat do
           r_val = unquote(right)
           cond do
             is_atom(l_val) and is_atom(r_val) ->
-              %OrTools.CpSat.Expr{special: [{:mul, OrTools.CpSat.Expr.var(l_val), OrTools.CpSat.Expr.var(r_val), 1}]}
+              %OrTools.CpSat.Expr{special: [{:mul, OrTools.CpSat.Expr.new(l_val), OrTools.CpSat.Expr.new(r_val), 1}]}
             is_atom(l_val) ->
-              OrTools.CpSat.Expr.scale(OrTools.CpSat.Expr.var(l_val), r_val)
+              OrTools.CpSat.Expr.scale(OrTools.CpSat.Expr.new(l_val), r_val)
             true ->
-              OrTools.CpSat.Expr.scale(OrTools.CpSat.Expr.var(r_val), l_val)
+              OrTools.CpSat.Expr.scale(OrTools.CpSat.Expr.new(r_val), l_val)
           end
         end
     end
@@ -832,7 +831,7 @@ defmodule OrTools.CpSat do
 
   # Runtime expression — could be a variable name (atom), a constant (integer), or an Expr
   defp quote_collect_terms(other) do
-    quote do: OrTools.CpSat.Expr.from_runtime(unquote(other))
+    quote do: OrTools.CpSat.Expr.new(unquote(other))
   end
 
   # Helper: extract coefficient value from AST (literal int or runtime expression)

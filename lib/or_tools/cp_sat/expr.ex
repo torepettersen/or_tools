@@ -6,16 +6,11 @@ defmodule OrTools.CpSat.Expr do
   special non-linear terms (abs, pow, mul, div, min, max) that will be
   linearized when building constraints or objectives.
 
-  ## Examples
+  Created via `CpSat.expr/1` and `CpSat.sum/1`. Composable at runtime:
 
-      iex> Expr.var(:x)
-      #Expr<x>
-
-      iex> Expr.add(Expr.var(:x), Expr.var(:y))
-      #Expr<x + y>
-
-      iex> Expr.scale(Expr.var(:x), 3)
-      #Expr<3*x>
+      score = CpSat.expr(2 * :x + 3 * :y)
+      penalty = CpSat.expr(-pow(:z, 2))
+      total = CpSat.sum([score, penalty])
   """
 
   defstruct terms: [], const: 0, special: []
@@ -34,16 +29,16 @@ defmodule OrTools.CpSat.Expr do
           | {:min, [atom()], integer()}
           | {:max, [atom()], integer()}
 
-  @doc "Creates an empty expression (zero)."
+  @doc false
   def new, do: %__MODULE__{}
+  def new(%__MODULE__{} = expr), do: expr
+  def new(name) when is_atom(name), do: %__MODULE__{terms: [{name, 1}]}
+  def new(value) when is_integer(value), do: %__MODULE__{const: value}
 
-  @doc "Creates an expression for a single variable with coefficient 1."
-  def var(name) when is_atom(name), do: %__MODULE__{terms: [{name, 1}]}
+  def new({name, coeff}) when is_atom(name) and is_integer(coeff),
+    do: %__MODULE__{terms: [{name, coeff}]}
 
-  @doc "Creates a constant expression."
-  def const(value) when is_integer(value), do: %__MODULE__{const: value}
-
-  @doc "Adds two expressions."
+  @doc false
   def add(%__MODULE__{} = a, %__MODULE__{} = b) do
     %__MODULE__{
       terms: a.terms ++ b.terms,
@@ -52,17 +47,17 @@ defmodule OrTools.CpSat.Expr do
     }
   end
 
-  @doc "Subtracts b from a."
+  @doc false
   def subtract(%__MODULE__{} = a, %__MODULE__{} = b) do
     add(a, negate(b))
   end
 
-  @doc "Negates an expression."
+  @doc false
   def negate(%__MODULE__{} = expr) do
     scale(expr, -1)
   end
 
-  @doc "Scales all terms in an expression by a factor."
+  @doc false
   def scale(%__MODULE__{} = expr, factor) when is_integer(factor) do
     %__MODULE__{
       terms: Enum.map(expr.terms, fn {v, c} -> {v, c * factor} end),
@@ -80,28 +75,6 @@ defmodule OrTools.CpSat.Expr do
 
   defp scale_special({:min, vars, coeff}, factor), do: {:min, vars, coeff * factor}
   defp scale_special({:max, vars, coeff}, factor), do: {:max, vars, coeff * factor}
-
-  @doc """
-  Coerces a value into an Expr.
-
-  Handles: `%Expr{}`, atoms (variable names), integers (constants),
-  and `{atom, integer}` tuples (weighted variables).
-  """
-  def coerce(%__MODULE__{} = expr), do: expr
-  def coerce(name) when is_atom(name), do: var(name)
-  def coerce(value) when is_integer(value), do: const(value)
-
-  def coerce({name, coeff}) when is_atom(name) and is_integer(coeff),
-    do: %__MODULE__{terms: [{name, coeff}]}
-
-  @doc """
-  Converts a runtime value (atom, integer, or Expr) into an Expr.
-
-  Used in macro-generated code to handle values whose type is unknown at compile time.
-  """
-  def from_runtime(%__MODULE__{} = expr), do: expr
-  def from_runtime(name) when is_atom(name), do: var(name)
-  def from_runtime(value) when is_integer(value), do: const(value)
 
   defimpl Inspect do
     import Inspect.Algebra

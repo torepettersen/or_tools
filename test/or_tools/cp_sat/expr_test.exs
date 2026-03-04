@@ -2,17 +2,26 @@ defmodule OrTools.CpSat.ExprTest do
   use ExUnit.Case
   alias OrTools.CpSat.Expr
 
-  describe "constructors" do
-    test "new creates zero expression" do
+  describe "new" do
+    test "zero expression" do
       assert %Expr{terms: [], const: 0, special: []} = Expr.new()
     end
 
-    test "var creates single variable" do
-      assert %Expr{terms: [x: 1]} = Expr.var(:x)
+    test "from variable" do
+      assert %Expr{terms: [x: 1]} = Expr.new(:x)
     end
 
-    test "const creates constant" do
-      assert %Expr{const: 42} = Expr.const(42)
+    test "from constant" do
+      assert %Expr{const: 42} = Expr.new(42)
+    end
+
+    test "from weighted variable" do
+      assert %Expr{terms: [{:x, 5}]} = Expr.new({:x, 5})
+    end
+
+    test "passthrough Expr" do
+      expr = Expr.new(:x)
+      assert Expr.new(expr) == expr
     end
   end
 
@@ -48,56 +57,22 @@ defmodule OrTools.CpSat.ExprTest do
     end
 
     test "scale applies to special terms" do
-      expr = %Expr{special: [{:abs, Expr.var(:x), 1}, {:pow, Expr.var(:y), 2, 3}]}
+      expr = %Expr{special: [{:abs, Expr.new(:x), 1}, {:pow, Expr.new(:y), 2, 3}]}
       result = Expr.scale(expr, 5)
       assert [{:abs, _, 5}, {:pow, _, 2, 15}] = result.special
     end
 
     test "add combines special terms" do
-      a = %Expr{special: [{:abs, Expr.var(:x), 1}]}
-      b = %Expr{special: [{:pow, Expr.var(:y), 2, 1}]}
+      a = %Expr{special: [{:abs, Expr.new(:x), 1}]}
+      b = %Expr{special: [{:pow, Expr.new(:y), 2, 1}]}
       result = Expr.add(a, b)
       assert length(result.special) == 2
     end
   end
 
-  describe "coerce" do
-    test "passes through Expr" do
-      expr = Expr.var(:x)
-      assert Expr.coerce(expr) == expr
-    end
-
-    test "converts atom to var" do
-      assert Expr.coerce(:x) == Expr.var(:x)
-    end
-
-    test "converts integer to const" do
-      assert Expr.coerce(42) == Expr.const(42)
-    end
-
-    test "converts {atom, int} tuple" do
-      assert Expr.coerce({:x, 5}) == %Expr{terms: [{:x, 5}]}
-    end
-  end
-
-  describe "from_runtime" do
-    test "handles Expr" do
-      expr = Expr.var(:x)
-      assert Expr.from_runtime(expr) == expr
-    end
-
-    test "handles atom" do
-      assert Expr.from_runtime(:x) == Expr.var(:x)
-    end
-
-    test "handles integer" do
-      assert Expr.from_runtime(42) == Expr.const(42)
-    end
-  end
-
   describe "inspect" do
     test "simple variable" do
-      assert inspect(Expr.var(:x)) == "#Expr<x>"
+      assert inspect(Expr.new(:x)) == "#Expr<x>"
     end
 
     test "weighted variable" do
@@ -121,7 +96,7 @@ defmodule OrTools.CpSat.ExprTest do
     end
 
     test "constant only" do
-      assert inspect(Expr.const(42)) == "#Expr<42>"
+      assert inspect(Expr.new(42)) == "#Expr<42>"
     end
   end
 end
