@@ -489,14 +489,7 @@ defmodule OrTools.CpSat do
         {status, values, objective} =
           OrTools.NIF.solve(model.vars, model.constraints, model.objective)
 
-        visible_values =
-          Map.reject(values, fn {name, _} ->
-            s = Atom.to_string(name)
-
-            String.starts_with?(s, "__abs_") or String.starts_with?(s, "__pow_") or
-              String.starts_with?(s, "__mul_") or String.starts_with?(s, "__div_") or
-              String.starts_with?(s, "__min_") or String.starts_with?(s, "__max_")
-          end)
+        visible_values = filter_internal_values(values)
 
         {:ok, %{status: status, values: visible_values, objective: objective}}
 
@@ -513,6 +506,149 @@ defmodule OrTools.CpSat do
       {:ok, result} -> result
       {:error, message} -> raise ArgumentError, message
     end
+  end
+
+  @doc """
+  Enumerates all solutions. Returns `{:ok, result}` or `{:error, reason}`.
+
+  The result contains `:status`, `:solutions` (a list of value maps), and `:metrics`.
+
+  ## Options
+
+  **No options** — collects all solutions in memory:
+
+      CpSat.solve_all(model)
+
+  **`:on_solution`** — called with each solution and the current state as it
+  is found. Solutions are not stored in memory, only counted. The final state
+  is available as `result.state`.
+
+  **`:init`** — called with the model's variable names to produce the initial
+  state. Defaults to `fn variables -> variables end`.
+
+      CpSat.solve_all(model,
+        init: fn variables -> {variables, 0} end,
+        on_solution: fn solution, {variables, count} ->
+          variables
+          |> Enum.map_join(" ", fn name -> "\#{name}=\#{solution.values[name]}" end)
+          |> IO.puts()
+          {variables, count + 1}
+        end)
+  """
+  def solve_all(%__MODULE__{} = model, opts \\ []) do
+    on_solution = Keyword.get(opts, :on_solution)
+    init = Keyword.get(opts, :init, fn variables -> variables end)
+
+    handler_opts =
+      if on_solution do
+        var_names = model.vars |> Enum.map(&elem(&1, 0)) |> Enum.reject(&internal_var?/1)
+        {init.(var_names), on_solution}
+      end
+
+    do_solve_all(model, handler_opts)
+  end
+
+  defp do_solve_all(model, handler_opts) do
+    case validate(model) do
+      :ok ->
+        callback_pid =
+          if handler_opts do
+            {init_state, on_solution} = handler_opts
+            spawn_solution_handler(model, init_state, on_solution)
+          end
+
+        {status, raw_solutions, metrics} =
+          OrTools.NIF.solve_all(model.vars, model.constraints, model.objective, callback_pid)
+
+        final_state =
+          if callback_pid do
+            send(callback_pid, {:done, self()})
+
+            receive do
+              {:handler_done, state} -> state
+            end
+          end
+
+        solutions =
+          Enum.map(raw_solutions, fn {values, objective} ->
+            %{values: filter_internal_values(values), objective: objective}
+          end)
+
+        result = %{status: status, solutions: solutions, metrics: metrics}
+
+        result =
+          if final_state != nil do
+            Map.put(result, :state, final_state)
+          else
+            result
+          end
+
+        {:ok, result}
+
+      {:error, _} = error ->
+        error
+    end
+  end
+
+  @doc """
+  Enumerates all solutions. Returns the result or raises on error.
+
+  See `solve_all/2` for options.
+  """
+  def solve_all!(%__MODULE__{} = model, opts \\ []) do
+    case solve_all(model, opts) do
+      {:ok, result} -> result
+      {:error, message} -> raise ArgumentError, message
+    end
+  end
+
+  defp spawn_solution_handler(model, init_state, callback) do
+    internal_prefixes = internal_var_prefixes(model)
+
+    spawn(fn ->
+      solution_handler_loop(callback, internal_prefixes, init_state)
+    end)
+  end
+
+  defp solution_handler_loop(callback, internal_prefixes, state) do
+    receive do
+      {:solution, _index, values, objective} ->
+        solution = %{values: reject_internal(values, internal_prefixes), objective: objective}
+        new_state = callback.(solution, state)
+        solution_handler_loop(callback, internal_prefixes, new_state)
+
+      {:done, caller} ->
+        send(caller, {:handler_done, state})
+    end
+  end
+
+  defp internal_var_prefixes(model) do
+    model.vars
+    |> Enum.map(&elem(&1, 0))
+    |> Enum.filter(fn name ->
+      s = Atom.to_string(name)
+
+      String.starts_with?(s, "__abs_") or String.starts_with?(s, "__pow_") or
+        String.starts_with?(s, "__mul_") or String.starts_with?(s, "__div_") or
+        String.starts_with?(s, "__min_") or String.starts_with?(s, "__max_")
+    end)
+    |> MapSet.new()
+  end
+
+  defp reject_internal(values, internal_names) do
+    Map.reject(values, fn {name, _} -> MapSet.member?(internal_names, name) end)
+  end
+
+  defp internal_var?(name) do
+    s = Atom.to_string(name)
+
+    String.starts_with?(s, "__abs_") or String.starts_with?(s, "__pow_") or
+      String.starts_with?(s, "__mul_") or String.starts_with?(s, "__div_") or
+      String.starts_with?(s, "__min_") or String.starts_with?(s, "__max_")
+  end
+
+  defp filter_internal_values(values) do
+    Map.reject(values, fn {name, _} -> internal_var?(name) end)
   end
 
   @doc """
@@ -628,7 +764,8 @@ defmodule OrTools.CpSat do
     combined = Expr.subtract(lhs, rhs)
 
     if combined.special != [] do
-      raise ArgumentError, "constraints cannot contain nonlinear terms (abs, pow, mul, div, min, max)"
+      raise ArgumentError,
+            "constraints cannot contain nonlinear terms (abs, pow, mul, div, min, max)"
     end
 
     final_vars = merge_terms(combined.terms)
@@ -687,7 +824,10 @@ defmodule OrTools.CpSat do
   defp quote_collect_terms({:div, _, [dividend, divisor]}) do
     dividend_ast = quote_collect_terms(dividend)
     divisor_ast = quote_collect_terms(divisor)
-    quote do: %OrTools.CpSat.Expr{special: [{:div, unquote(dividend_ast), unquote(divisor_ast), 1}]}
+
+    quote do: %OrTools.CpSat.Expr{
+            special: [{:div, unquote(dividend_ast), unquote(divisor_ast), 1}]
+          }
   end
 
   # pow(expr, exponent)
@@ -743,14 +883,20 @@ defmodule OrTools.CpSat do
     dividend_ast = quote_collect_terms(dividend)
     divisor_ast = quote_collect_terms(divisor)
     coeff_ast = quote_collect_terms_coeff(coeff)
-    quote do: %OrTools.CpSat.Expr{special: [{:div, unquote(dividend_ast), unquote(divisor_ast), unquote(coeff_ast)}]}
+
+    quote do: %OrTools.CpSat.Expr{
+            special: [{:div, unquote(dividend_ast), unquote(divisor_ast), unquote(coeff_ast)}]
+          }
   end
 
   defp quote_collect_terms({:*, _, [{:div, _, [dividend, divisor]}, coeff]}) do
     dividend_ast = quote_collect_terms(dividend)
     divisor_ast = quote_collect_terms(divisor)
     coeff_ast = quote_collect_terms_coeff(coeff)
-    quote do: %OrTools.CpSat.Expr{special: [{:div, unquote(dividend_ast), unquote(divisor_ast), unquote(coeff_ast)}]}
+
+    quote do: %OrTools.CpSat.Expr{
+            special: [{:div, unquote(dividend_ast), unquote(divisor_ast), unquote(coeff_ast)}]
+          }
   end
 
   # coeff * pow(base, exp)
@@ -758,14 +904,20 @@ defmodule OrTools.CpSat do
        when is_integer(exp) and exp >= 2 do
     base_ast = quote_collect_terms(base)
     coeff_ast = quote_collect_terms_coeff(coeff)
-    quote do: %OrTools.CpSat.Expr{special: [{:pow, unquote(base_ast), unquote(exp), unquote(coeff_ast)}]}
+
+    quote do: %OrTools.CpSat.Expr{
+            special: [{:pow, unquote(base_ast), unquote(exp), unquote(coeff_ast)}]
+          }
   end
 
   defp quote_collect_terms({:*, _, [{:pow, _, [base, exp]}, coeff]})
        when is_integer(exp) and exp >= 2 do
     base_ast = quote_collect_terms(base)
     coeff_ast = quote_collect_terms_coeff(coeff)
-    quote do: %OrTools.CpSat.Expr{special: [{:pow, unquote(base_ast), unquote(exp), unquote(coeff_ast)}]}
+
+    quote do: %OrTools.CpSat.Expr{
+            special: [{:pow, unquote(base_ast), unquote(exp), unquote(coeff_ast)}]
+          }
   end
 
   # coeff * abs(expr)
@@ -809,19 +961,27 @@ defmodule OrTools.CpSat do
 
       is_atom(left) ->
         left_expr = Macro.escape(%Expr{terms: [{left, 1}]})
+
         quote do
           r_val = unquote(right)
+
           if is_atom(r_val),
-            do: %OrTools.CpSat.Expr{special: [{:mul, unquote(left_expr), OrTools.CpSat.Expr.new(r_val), 1}]},
+            do: %OrTools.CpSat.Expr{
+              special: [{:mul, unquote(left_expr), OrTools.CpSat.Expr.new(r_val), 1}]
+            },
             else: OrTools.CpSat.Expr.scale(unquote(left_expr), r_val)
         end
 
       is_atom(right) ->
         right_expr = Macro.escape(%Expr{terms: [{right, 1}]})
+
         quote do
           l_val = unquote(left)
+
           if is_atom(l_val),
-            do: %OrTools.CpSat.Expr{special: [{:mul, OrTools.CpSat.Expr.new(l_val), unquote(right_expr), 1}]},
+            do: %OrTools.CpSat.Expr{
+              special: [{:mul, OrTools.CpSat.Expr.new(l_val), unquote(right_expr), 1}]
+            },
             else: OrTools.CpSat.Expr.scale(unquote(right_expr), l_val)
         end
 
@@ -829,11 +989,16 @@ defmodule OrTools.CpSat do
         quote do
           l_val = unquote(left)
           r_val = unquote(right)
+
           cond do
             is_atom(l_val) and is_atom(r_val) ->
-              %OrTools.CpSat.Expr{special: [{:mul, OrTools.CpSat.Expr.new(l_val), OrTools.CpSat.Expr.new(r_val), 1}]}
+              %OrTools.CpSat.Expr{
+                special: [{:mul, OrTools.CpSat.Expr.new(l_val), OrTools.CpSat.Expr.new(r_val), 1}]
+              }
+
             is_atom(l_val) ->
               OrTools.CpSat.Expr.scale(OrTools.CpSat.Expr.new(l_val), r_val)
+
             true ->
               OrTools.CpSat.Expr.scale(OrTools.CpSat.Expr.new(r_val), l_val)
           end

@@ -655,6 +655,135 @@ defmodule OrTools.CpSatTest do
     end
   end
 
+  describe "solve_all" do
+    test "enumerates all solutions" do
+      result =
+        CpSat.new()
+        |> CpSat.int_var(:x, 1..3)
+        |> CpSat.int_var(:y, 1..3)
+        |> CpSat.all_different([:x, :y])
+        |> CpSat.solve_all!()
+
+      assert result.status == :optimal
+      assert length(result.solutions) == 6
+
+      all_values = Enum.map(result.solutions, & &1.values)
+
+      assert Enum.sort(all_values) ==
+               Enum.sort([
+                 %{x: 1, y: 2},
+                 %{x: 1, y: 3},
+                 %{x: 2, y: 1},
+                 %{x: 2, y: 3},
+                 %{x: 3, y: 1},
+                 %{x: 3, y: 2}
+               ])
+    end
+
+    test "includes objective in each solution" do
+      result =
+        CpSat.new()
+        |> CpSat.int_var(:x, 1..3)
+        |> CpSat.int_var(:y, 1..3)
+        |> CpSat.all_different([:x, :y])
+        |> CpSat.maximize(:x + :y)
+        |> CpSat.solve_all!()
+
+      for solution <- result.solutions do
+        assert Map.has_key?(solution, :objective)
+        assert Map.has_key?(solution, :values)
+      end
+    end
+
+    test "on_solution callback accumulates state in result.state" do
+      result =
+        CpSat.new()
+        |> CpSat.int_var(:x, 1..3)
+        |> CpSat.int_var(:y, 1..3)
+        |> CpSat.all_different([:x, :y])
+        |> CpSat.solve_all!(
+          init: fn _variables -> [] end,
+          on_solution: fn solution, acc -> [solution | acc] end
+        )
+
+      assert length(result.state) == 6
+
+      # With on_solution, solutions are not stored in memory
+      assert result.solutions == []
+      assert result.metrics.num_solutions == 6
+
+      # Each accumulated solution has the same shape
+      for solution <- result.state do
+        assert Map.has_key?(solution, :values)
+        assert Map.has_key?(solution, :objective)
+      end
+    end
+
+    test "on_solution callback can count solutions" do
+      result =
+        CpSat.new()
+        |> CpSat.int_var(:x, 1..3)
+        |> CpSat.int_var(:y, 1..3)
+        |> CpSat.all_different([:x, :y])
+        |> CpSat.solve_all!(
+          init: fn _variables -> 0 end,
+          on_solution: fn _solution, count -> count + 1 end
+        )
+
+      assert result.state == 6
+      assert result.metrics.num_solutions == 6
+      assert result.solutions == []
+    end
+
+    test "init receives variable names and sets initial state" do
+      result =
+        CpSat.new()
+        |> CpSat.int_var(:x, 1..2)
+        |> CpSat.int_var(:y, 1..2)
+        |> CpSat.solve_all!(
+          init: fn variables -> variables end,
+          on_solution: fn _solution, state -> state end
+        )
+
+      assert result.state == [:x, :y]
+    end
+
+    test "default init sets state to variable names" do
+      result =
+        CpSat.new()
+        |> CpSat.int_var(:x, 1..2)
+        |> CpSat.int_var(:y, 1..2)
+        |> CpSat.solve_all!(on_solution: fn _solution, state -> state end)
+
+      assert result.state == [:x, :y]
+    end
+
+    test "returns empty solutions for infeasible model" do
+      result =
+        CpSat.new()
+        |> CpSat.int_var(:x, 0..1)
+        |> CpSat.constrain(:x >= 2)
+        |> CpSat.solve_all!()
+
+      assert result.status == :infeasible
+      assert result.solutions == []
+    end
+
+    test "includes metrics" do
+      result =
+        CpSat.new()
+        |> CpSat.int_var(:x, 1..3)
+        |> CpSat.int_var(:y, 1..3)
+        |> CpSat.all_different([:x, :y])
+        |> CpSat.solve_all!()
+
+      assert Map.has_key?(result.metrics, :num_conflicts)
+      assert Map.has_key?(result.metrics, :num_branches)
+      assert Map.has_key?(result.metrics, :wall_time_us)
+      assert result.metrics.num_solutions == 6
+    end
+  end
+
   describe "validation" do
     test "solve! raises on unknown variable in constraint" do
       assert_raise ArgumentError, ~r/unknown variable/, fn ->
