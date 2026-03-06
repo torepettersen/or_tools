@@ -1,0 +1,146 @@
+# Constraint Optimization
+
+```elixir
+Mix.install([{:or_tools, path: "."}])
+```
+
+## Basic Example
+
+[Guide](https://developers.google.com/optimization/cp/cp_solver)
+
+```elixir
+use OrTools.CpSat
+
+result =
+  CpSat.new()
+  |> CpSat.int_var(:x, 0..2)
+  |> CpSat.int_var(:y, 0..2)
+  |> CpSat.int_var(:z, 0..2)
+  |> CpSat.constrain(:x != :y)
+  |> CpSat.solve!()
+
+if result.status in [:optimal, :feasible] do
+  result.values
+else
+  "No solution found."
+end
+```
+
+## Solving a CP Problem
+
+[Guide](https://developers.google.com/optimization/cp/cp_example)
+
+```elixir
+use OrTools.CpSat
+
+var_upper_bound = Enum.max([50, 45, 37])
+
+result =
+  CpSat.new()
+  |> CpSat.int_vars([:x, :y, :z], 0..var_upper_bound)
+  |> CpSat.constrain(2 * :x + 7 * :y + 3 * :z <= 50)
+  |> CpSat.constrain(3 * :x - 5 * :y + 7 * :z <= 45)
+  |> CpSat.constrain(5 * :x + 2 * :y - 6 * :z <= 37)
+  |> CpSat.maximize(2 * :x + 2 * :y + 3 * :z)
+  |> CpSat.solve!()
+
+if result.status in [:optimal, :feasible] do
+  %{objective: result.objective, values: result.values}
+else
+  "No solution found."
+end
+```
+
+## Cryptarithmetic
+
+[Guide](https://developers.google.com/optimization/cp/cryptarithmetic)
+
+Solve: CP + IS + FUN = TRUE, where each letter is a unique digit and leading letters are non-zero.
+
+```elixir
+use OrTools.CpSat
+
+base = 10
+
+result =
+  CpSat.new()
+  |> CpSat.int_vars([:c, :i, :f, :t], 1..(base - 1))
+  |> CpSat.int_vars([:p, :s, :u, :n, :r, :e], 0..(base - 1))
+  |> CpSat.all_different([:c, :p, :i, :s, :f, :u, :n, :t, :r, :e])
+  |> CpSat.constrain(
+    :c * 10 + :p + :i * 10 + :s + :f * 100 + :u * 10 + :n ==
+      :t * 1000 + :r * 100 + :u * 10 + :e
+  )
+  |> CpSat.solve_all!(
+    init: fn variables -> %{variables: variables, count: 0} end,
+    on_solution: fn solution, state ->
+      state.variables
+      |> Enum.map_join(" ", fn name -> "#{name}=#{solution.values[name]}" end)
+      |> IO.puts()
+
+      Map.update!(state, :count, &(&1 + 1))
+    end
+  )
+
+IO.puts("")
+IO.puts("Statistics")
+IO.puts("  - status          : #{result.status}")
+IO.puts("  - conflicts       : #{result.metrics.num_conflicts}")
+IO.puts("  - branches        : #{result.metrics.num_branches}")
+IO.puts("  - wall time       : #{result.metrics.wall_time_us / 1_000_000} s")
+IO.puts("  - solutions found : #{result.state.count}")
+```
+
+## N-Queens
+
+[Guide](https://developers.google.com/optimization/cp/queens)
+
+Place 8 queens on an 8x8 chessboard such that no two queens threaten each other.
+
+```elixir
+use OrTools.CpSat
+
+board_size = 8
+board_range = 0..(board_size - 1)
+
+queens = Enum.map(board_range, fn i -> :"q#{i}" end)
+
+result =
+  CpSat.new()
+  |> CpSat.int_vars(queens, board_range)
+  |> CpSat.all_different(queens)
+  |> CpSat.all_different(Enum.map(board_range, fn i -> CpSat.expr(:"q#{i}" + i) end))
+  |> CpSat.all_different(Enum.map(board_range, fn i -> CpSat.expr(:"q#{i}" - i) end))
+  |> CpSat.solve_all!(
+    init: fn _variables -> %{queens: queens, count: 0} end,
+    on_solution: fn solution, state ->
+      state.queens
+      |> Enum.map_join(" ", fn name -> "#{name}=#{solution.values[name]}" end)
+      |> IO.puts()
+
+      Map.update!(state, :count, &(&1 + 1))
+    end
+  )
+
+IO.puts("Solutions found: #{result.state.count}")
+```
+
+## Setting Solver Limits
+
+```elixir
+use OrTools.CpSat
+
+result =
+  CpSat.new()
+  |> CpSat.int_var(:x, 0..2)
+  |> CpSat.int_var(:y, 0..2)
+  |> CpSat.int_var(:z, 0..2)
+  |> CpSat.constrain(:x != :y)
+  |> CpSat.solve!(params: [max_time_in_seconds: 10])
+
+if result.status in [:optimal, :feasible] do
+  result.values
+else
+  "No solution found."
+end
+```
