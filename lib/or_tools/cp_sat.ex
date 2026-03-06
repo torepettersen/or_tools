@@ -47,12 +47,12 @@ defmodule OrTools.CpSat do
   end
 
   def bool_var(%__MODULE__{} = model, name) when is_atom(name) do
-    %{model | vars: model.vars ++ [{name, 0, 1}]}
+    %{model | vars: model.vars ++ [%Variable{type: :bool, name: name}]}
   end
 
   @doc "Adds boolean (0/1) variables for each name in the list."
   def bool_vars(%__MODULE__{} = model, names) when is_list(names) do
-    new_vars = Enum.map(names, fn name when is_atom(name) -> {name, 0, 1} end)
+    new_vars = Enum.map(names, fn name when is_atom(name) -> %Variable{type: :bool, name: name} end)
     %{model | vars: model.vars ++ new_vars}
   end
 
@@ -67,16 +67,16 @@ defmodule OrTools.CpSat do
 
   @doc "Adds an integer variable to a model."
   def int_var(%__MODULE__{} = model, name, %Range{first: lb, last: ub}) when is_atom(name) do
-    %{model | vars: model.vars ++ [{name, lb, ub}]}
+    %{model | vars: model.vars ++ [%Variable{type: :int, name: name, lb: lb, ub: ub}]}
   end
 
   def int_var(%__MODULE__{} = model, name, lb, ub) when is_atom(name) do
-    %{model | vars: model.vars ++ [{name, lb, ub}]}
+    %{model | vars: model.vars ++ [%Variable{type: :int, name: name, lb: lb, ub: ub}]}
   end
 
   @doc "Adds integer variables with the given range for each name in the list."
   def int_vars(%__MODULE__{} = model, names, %Range{first: lb, last: ub}) when is_list(names) do
-    new_vars = Enum.map(names, fn name when is_atom(name) -> {name, lb, ub} end)
+    new_vars = Enum.map(names, fn name when is_atom(name) -> %Variable{type: :int, name: name, lb: lb, ub: ub} end)
     %{model | vars: model.vars ++ new_vars}
   end
 
@@ -143,7 +143,7 @@ defmodule OrTools.CpSat do
 
   @doc false
   def add_constraint(%__MODULE__{} = model, terms, op, rhs) do
-    %{model | constraints: model.constraints ++ [{terms, op, rhs}]}
+    %{model | constraints: model.constraints ++ [%Constraint{type: :linear, data: {terms, op, rhs}}]}
   end
 
   @doc false
@@ -174,7 +174,7 @@ defmodule OrTools.CpSat do
   """
   def all_different(%__MODULE__{} = model, items) when is_list(items) do
     name_offsets = expand_all_different_items(items)
-    %{model | constraints: model.constraints ++ [{:all_different, name_offsets}]}
+    %{model | constraints: model.constraints ++ [%Constraint{type: :all_different, data: name_offsets}]}
   end
 
   @doc """
@@ -204,7 +204,7 @@ defmodule OrTools.CpSat do
   end
 
   def exactly_one(%__MODULE__{} = model, var_names) when is_list(var_names) do
-    %{model | constraints: model.constraints ++ [{:exactly_one, var_names}]}
+    %{model | constraints: model.constraints ++ [%Constraint{type: :exactly_one, data: var_names}]}
   end
 
   @doc "Constrains exactly one, with immediate validation."
@@ -219,7 +219,7 @@ defmodule OrTools.CpSat do
   end
 
   def at_most_one(%__MODULE__{} = model, var_names) when is_list(var_names) do
-    %{model | constraints: model.constraints ++ [{:at_most_one, var_names}]}
+    %{model | constraints: model.constraints ++ [%Constraint{type: :at_most_one, data: var_names}]}
   end
 
   @doc "Constrains at most one, with immediate validation."
@@ -234,7 +234,7 @@ defmodule OrTools.CpSat do
   end
 
   def at_least_one(%__MODULE__{} = model, var_names) when is_list(var_names) do
-    %{model | constraints: model.constraints ++ [{:at_least_one, var_names}]}
+    %{model | constraints: model.constraints ++ [%Constraint{type: :at_least_one, data: var_names}]}
   end
 
   @doc "Constrains at least one, with immediate validation."
@@ -249,7 +249,7 @@ defmodule OrTools.CpSat do
   end
 
   def bool_and(%__MODULE__{} = model, var_names) when is_list(var_names) do
-    %{model | constraints: model.constraints ++ [{:bool_and, var_names}]}
+    %{model | constraints: model.constraints ++ [%Constraint{type: :bool_and, data: var_names}]}
   end
 
   @doc "Constrains boolean AND, with immediate validation."
@@ -264,7 +264,7 @@ defmodule OrTools.CpSat do
   end
 
   def bool_or(%__MODULE__{} = model, var_names) when is_list(var_names) do
-    %{model | constraints: model.constraints ++ [{:bool_or, var_names}]}
+    %{model | constraints: model.constraints ++ [%Constraint{type: :bool_or, data: var_names}]}
   end
 
   @doc "Constrains boolean OR, with immediate validation."
@@ -279,7 +279,7 @@ defmodule OrTools.CpSat do
   end
 
   def bool_xor(%__MODULE__{} = model, var_names) when is_list(var_names) do
-    %{model | constraints: model.constraints ++ [{:bool_xor, var_names}]}
+    %{model | constraints: model.constraints ++ [%Constraint{type: :bool_xor, data: var_names}]}
   end
 
   @doc "Constrains boolean XOR, with immediate validation."
@@ -381,7 +381,9 @@ defmodule OrTools.CpSat do
   # Linearizes an %Expr{} into {model, [{atom, int}]} by converting special terms
   # into auxiliary variables and constraints.
   defp flatten_expr(model, %Expr{terms: terms, const: _const, special: special}) do
-    var_bounds = Map.new(model.vars, fn {name, lb, ub} -> {name, {lb, ub}} end)
+    var_bounds = Map.new(model.vars, fn %Variable{name: name, lb: lb, ub: ub} ->
+      {name, {lb || 0, ub || 1}}
+    end)
 
     Enum.reduce(special, {model, terms}, fn
       {:abs, %Expr{} = inner, coeff}, {model, acc} ->
@@ -397,7 +399,7 @@ defmodule OrTools.CpSat do
 
         model = %{
           model
-          | constraints: model.constraints ++ [{:abs_eq, abs_name, inner.terms, inner.const}]
+          | constraints: model.constraints ++ [%Constraint{type: :abs_eq, data: {abs_name, inner.terms, inner.const}}]
         }
 
         {model, [{abs_name, coeff} | acc]}
@@ -431,7 +433,7 @@ defmodule OrTools.CpSat do
 
               model = %{
                 model
-                | constraints: model.constraints ++ [{eq_terms, :==, -base.const}]
+                | constraints: model.constraints ++ [%Constraint{type: :linear, data: {eq_terms, :==, -base.const}}]
               }
 
               {model, var_bounds, aux_name}
@@ -459,7 +461,7 @@ defmodule OrTools.CpSat do
 
             model = %{
               model
-              | constraints: model.constraints ++ [{:mul_eq, pow_name, factors}]
+              | constraints: model.constraints ++ [%Constraint{type: :mul_eq, data: {pow_name, factors}}]
             }
 
             {model, vb, pow_name}
@@ -480,7 +482,7 @@ defmodule OrTools.CpSat do
 
         model = %{
           model
-          | constraints: model.constraints ++ [{:mul_eq, mul_name, [left_var, right_var]}]
+          | constraints: model.constraints ++ [%Constraint{type: :mul_eq, data: {mul_name, [left_var, right_var]}}]
         }
 
         {model, [{mul_name, coeff} | acc]}
@@ -500,7 +502,7 @@ defmodule OrTools.CpSat do
 
         model = %{
           model
-          | constraints: model.constraints ++ [{:min_eq, min_name, var_names}]
+          | constraints: model.constraints ++ [%Constraint{type: :min_eq, data: {min_name, var_names}}]
         }
 
         {model, [{min_name, coeff} | acc]}
@@ -520,7 +522,7 @@ defmodule OrTools.CpSat do
 
         model = %{
           model
-          | constraints: model.constraints ++ [{:max_eq, max_name, var_names}]
+          | constraints: model.constraints ++ [%Constraint{type: :max_eq, data: {max_name, var_names}}]
         }
 
         {model, [{max_name, coeff} | acc]}
@@ -540,7 +542,7 @@ defmodule OrTools.CpSat do
 
         model = %{
           model
-          | constraints: model.constraints ++ [{:div_eq, div_name, dividend_var, divisor_var}]
+          | constraints: model.constraints ++ [%Constraint{type: :div_eq, data: {div_name, dividend_var, divisor_var}}]
         }
 
         {model, [{div_name, coeff} | acc]}
@@ -564,8 +566,12 @@ defmodule OrTools.CpSat do
       :ok ->
         params = Keyword.get(opts, :params, [])
 
+        # Convert structs to tuples for NIF
+        vars_tuples = Enum.map(model.vars, &Variable.to_tuple/1)
+        constraints_tuples = Enum.map(model.constraints, &Constraint.to_tuple/1)
+
         {status, values, objective} =
-          OrTools.NIF.solve(model.vars, model.constraints, model.objective, params)
+          OrTools.NIF.solve(vars_tuples, constraints_tuples, model.objective, params)
 
         visible_values = filter_internal_values(values)
 
@@ -622,7 +628,7 @@ defmodule OrTools.CpSat do
 
     handler_opts =
       if on_solution do
-        var_names = model.vars |> Enum.map(&elem(&1, 0)) |> Enum.reject(&internal_var?/1)
+        var_names = model.vars |> Enum.map(fn %Variable{name: name} -> name end) |> Enum.reject(&internal_var?/1)
         {init.(var_names), on_solution}
       end
 
@@ -638,8 +644,12 @@ defmodule OrTools.CpSat do
             spawn_solution_handler(model, init_state, on_solution)
           end
 
+        # Convert structs to tuples for NIF
+        vars_tuples = Enum.map(model.vars, &Variable.to_tuple/1)
+        constraints_tuples = Enum.map(model.constraints, &Constraint.to_tuple/1)
+
         {status, raw_solutions, metrics} =
-          OrTools.NIF.solve_all(model.vars, model.constraints, model.objective, callback_pid, params)
+          OrTools.NIF.solve_all(vars_tuples, constraints_tuples, model.objective, callback_pid, params)
 
         final_state =
           if callback_pid do
@@ -705,7 +715,7 @@ defmodule OrTools.CpSat do
 
   defp internal_var_prefixes(model) do
     model.vars
-    |> Enum.map(&elem(&1, 0))
+    |> Enum.map(fn %Variable{name: name} -> name end)
     |> Enum.filter(fn name ->
       s = Atom.to_string(name)
 
@@ -747,25 +757,25 @@ defmodule OrTools.CpSat do
   # --- Validation helpers ---
 
   defp declared_var_names(%__MODULE__{vars: vars}) do
-    MapSet.new(vars, &elem(&1, 0))
+    MapSet.new(vars, fn %Variable{name: name} -> name end)
   end
 
   defp validate_constraints([], _declared), do: :ok
 
-  defp validate_constraints([constraint | rest], declared) do
+  defp validate_constraints([%Constraint{} = constraint | rest], declared) do
     case validate_constraint(constraint, declared) do
       :ok -> validate_constraints(rest, declared)
       error -> error
     end
   end
 
-  defp validate_constraint({:all_different, name_offsets}, declared) do
+  defp validate_constraint(%Constraint{type: :all_different, data: name_offsets}, declared) do
     names = Enum.map(name_offsets, &elem(&1, 0))
     check_var_names(names, declared)
   end
 
-  defp validate_constraint({tag, var_names}, declared)
-       when tag in [
+  defp validate_constraint(%Constraint{type: type, data: var_names}, declared)
+       when type in [
               :exactly_one,
               :at_most_one,
               :at_least_one,
@@ -776,23 +786,23 @@ defmodule OrTools.CpSat do
     check_var_names(var_names, declared)
   end
 
-  defp validate_constraint({:abs_eq, target, terms, _const}, declared) do
+  defp validate_constraint(%Constraint{type: :abs_eq, data: {target, terms, _const}}, declared) do
     with :ok <- check_var_names([target], declared),
          :ok <- check_terms(terms, declared) do
       :ok
     end
   end
 
-  defp validate_constraint({tag, target, var_names}, declared)
-       when tag in [:mul_eq, :min_eq, :max_eq] do
+  defp validate_constraint(%Constraint{type: type, data: {target, var_names}}, declared)
+       when type in [:mul_eq, :min_eq, :max_eq] do
     check_var_names([target | var_names], declared)
   end
 
-  defp validate_constraint({:div_eq, target, dividend, divisor}, declared) do
+  defp validate_constraint(%Constraint{type: :div_eq, data: {target, dividend, divisor}}, declared) do
     check_var_names([target, dividend, divisor], declared)
   end
 
-  defp validate_constraint({terms, _op, _rhs}, declared) do
+  defp validate_constraint(%Constraint{type: :linear, data: {terms, _op, _rhs}}, declared) do
     check_terms(terms, declared)
   end
 
@@ -1116,20 +1126,20 @@ defmodule OrTools.CpSat do
 
     def into(model) do
       fun = fn
-        # Variable struct
+        # Variable struct - store directly
         acc, {:cont, %Variable{} = v} ->
-          add_var(acc, Variable.to_tuple(v))
+          %{acc | vars: acc.vars ++ [v]}
 
-        # Constraint struct
+        # Constraint struct - store directly
         acc, {:cont, %Constraint{} = c} ->
-          add_constraint_item(acc, Constraint.to_tuple(c))
+          %{acc | constraints: acc.constraints ++ [c]}
 
         # List of Variable or Constraint structs
         acc, {:cont, items} when is_list(items) ->
           Enum.reduce(items, acc, fn
-            %Variable{} = v, m -> add_var(m, Variable.to_tuple(v))
-            %Constraint{} = c, m -> add_constraint_item(m, Constraint.to_tuple(c))
-            tuple, m when is_tuple(tuple) -> add_constraint_item(m, tuple)
+            %Variable{} = v, m -> %{m | vars: m.vars ++ [v]}
+            %Constraint{} = c, m -> %{m | constraints: m.constraints ++ [c]}
+            tuple, m when is_tuple(tuple) -> add_constraint_tuple(m, tuple)
           end)
 
         # Backward compat: raw tuples
@@ -1137,7 +1147,7 @@ defmodule OrTools.CpSat do
           OrTools.CpSat.bool_var(acc, name)
 
         acc, {:cont, tuple} when is_tuple(tuple) ->
-          add_constraint_item(acc, tuple)
+          add_constraint_tuple(acc, tuple)
 
         acc, :done ->
           acc
@@ -1149,40 +1159,37 @@ defmodule OrTools.CpSat do
       {model, fun}
     end
 
-    defp add_var(model, {name, lb, ub}) do
-      %{model | vars: model.vars ++ [{name, lb, ub}]}
-    end
-
-    defp add_constraint_item(model, {terms, op, rhs}) when is_list(terms) do
+    # Handle raw tuples for backward compatibility
+    defp add_constraint_tuple(model, {terms, op, rhs}) when is_list(terms) do
       OrTools.CpSat.add_constraint(model, terms, op, rhs)
     end
 
-    defp add_constraint_item(model, {:exactly_one, names}) do
+    defp add_constraint_tuple(model, {:exactly_one, names}) do
       OrTools.CpSat.exactly_one(model, names)
     end
 
-    defp add_constraint_item(model, {:at_most_one, names}) do
+    defp add_constraint_tuple(model, {:at_most_one, names}) do
       OrTools.CpSat.at_most_one(model, names)
     end
 
-    defp add_constraint_item(model, {:at_least_one, names}) do
+    defp add_constraint_tuple(model, {:at_least_one, names}) do
       OrTools.CpSat.at_least_one(model, names)
     end
 
-    defp add_constraint_item(model, {:bool_and, names}) do
+    defp add_constraint_tuple(model, {:bool_and, names}) do
       OrTools.CpSat.bool_and(model, names)
     end
 
-    defp add_constraint_item(model, {:bool_or, names}) do
+    defp add_constraint_tuple(model, {:bool_or, names}) do
       OrTools.CpSat.bool_or(model, names)
     end
 
-    defp add_constraint_item(model, {:bool_xor, names}) do
+    defp add_constraint_tuple(model, {:bool_xor, names}) do
       OrTools.CpSat.bool_xor(model, names)
     end
 
-    defp add_constraint_item(model, {:all_different, name_offsets}) do
-      %{model | constraints: model.constraints ++ [{:all_different, name_offsets}]}
+    defp add_constraint_tuple(model, {:all_different, name_offsets}) do
+      %{model | constraints: model.constraints ++ [%Constraint{type: :all_different, data: name_offsets}]}
     end
   end
 end
