@@ -40,6 +40,8 @@ defmodule OrTools.CpSat do
   def new, do: %__MODULE__{}
 
   @doc "Adds a boolean (0/1) variable with the given name."
+  def bool_var(name) when is_atom(name), do: {:bool_var, name}
+
   def bool_var(%__MODULE__{} = model, name) when is_atom(name) do
     %{model | vars: model.vars ++ [{name, 0, 1}]}
   end
@@ -171,6 +173,8 @@ defmodule OrTools.CpSat do
   end
 
   @doc "Constrains exactly one of the given boolean variables to be true."
+  def exactly_one(var_names) when is_list(var_names), do: {:exactly_one, var_names}
+
   def exactly_one(%__MODULE__{} = model, var_names) when is_list(var_names) do
     %{model | constraints: model.constraints ++ [{:exactly_one, var_names}]}
   end
@@ -182,6 +186,8 @@ defmodule OrTools.CpSat do
   end
 
   @doc "Constrains at most one of the given boolean variables to be true."
+  def at_most_one(var_names) when is_list(var_names), do: {:at_most_one, var_names}
+
   def at_most_one(%__MODULE__{} = model, var_names) when is_list(var_names) do
     %{model | constraints: model.constraints ++ [{:at_most_one, var_names}]}
   end
@@ -193,6 +199,8 @@ defmodule OrTools.CpSat do
   end
 
   @doc "Constrains at least one of the given boolean variables to be true."
+  def at_least_one(var_names) when is_list(var_names), do: {:at_least_one, var_names}
+
   def at_least_one(%__MODULE__{} = model, var_names) when is_list(var_names) do
     %{model | constraints: model.constraints ++ [{:at_least_one, var_names}]}
   end
@@ -204,6 +212,8 @@ defmodule OrTools.CpSat do
   end
 
   @doc "Constrains the boolean AND of the given variables to be true."
+  def bool_and(var_names) when is_list(var_names), do: {:bool_and, var_names}
+
   def bool_and(%__MODULE__{} = model, var_names) when is_list(var_names) do
     %{model | constraints: model.constraints ++ [{:bool_and, var_names}]}
   end
@@ -215,6 +225,8 @@ defmodule OrTools.CpSat do
   end
 
   @doc "Constrains the boolean OR of the given variables to be true."
+  def bool_or(var_names) when is_list(var_names), do: {:bool_or, var_names}
+
   def bool_or(%__MODULE__{} = model, var_names) when is_list(var_names) do
     %{model | constraints: model.constraints ++ [{:bool_or, var_names}]}
   end
@@ -226,6 +238,8 @@ defmodule OrTools.CpSat do
   end
 
   @doc "Constrains the boolean XOR of the given variables to be true."
+  def bool_xor(var_names) when is_list(var_names), do: {:bool_xor, var_names}
+
   def bool_xor(%__MODULE__{} = model, var_names) when is_list(var_names) do
     %{model | constraints: model.constraints ++ [{:bool_xor, var_names}]}
   end
@@ -1061,7 +1075,14 @@ defmodule OrTools.CpSat do
   defimpl Collectable do
     def into(model) do
       fun = fn
+        acc, {:cont, {:bool_var, name}} -> OrTools.CpSat.bool_var(acc, name)
         acc, {:cont, {terms, op, rhs}} -> OrTools.CpSat.add_constraint(acc, terms, op, rhs)
+        acc, {:cont, {:exactly_one, names}} -> OrTools.CpSat.exactly_one(acc, names)
+        acc, {:cont, {:at_most_one, names}} -> OrTools.CpSat.at_most_one(acc, names)
+        acc, {:cont, {:at_least_one, names}} -> OrTools.CpSat.at_least_one(acc, names)
+        acc, {:cont, {:bool_and, names}} -> OrTools.CpSat.bool_and(acc, names)
+        acc, {:cont, {:bool_or, names}} -> OrTools.CpSat.bool_or(acc, names)
+        acc, {:cont, {:bool_xor, names}} -> OrTools.CpSat.bool_xor(acc, names)
         acc, :done -> acc
         _acc, :halt -> :ok
       end
