@@ -22,6 +22,7 @@ defmodule OrTools.CpSat do
       result.objective # 35.0
   """
 
+  alias OrTools.CpSat.Constraint
   alias OrTools.CpSat.Expr
 
   defmacro __using__(_opts) do
@@ -70,18 +71,21 @@ defmodule OrTools.CpSat do
   @doc """
   Builds a constraint without adding it to a model.
 
-  Use with `into:` to collect constraints into a model:
+  Returns a `Constraint` struct that can be collected into a model:
 
       for shift <- shifts, into: model do
         assignments = Enum.map(employees, fn emp -> var_name(emp, shift) end)
-        CpSat.constraint(sum(assignments) <= 1)
+        CpSat.constrain(sum(assignments) <= 1)
       end
   """
-  defmacro constraint(expr) do
+  defmacro constrain(expr) do
     {lhs_ast, op, rhs_ast} = parse_constraint_ast(expr)
 
     quote do
-      OrTools.CpSat.__build_constraint__(unquote(lhs_ast), unquote(rhs_ast), unquote(op))
+      {terms, op, rhs} =
+        OrTools.CpSat.__build_constraint__(unquote(lhs_ast), unquote(rhs_ast), unquote(op))
+
+      %OrTools.CpSat.Constraint{type: :linear, data: {terms, op, rhs}}
     end
   end
 
@@ -137,12 +141,22 @@ defmodule OrTools.CpSat do
   end
 
   @doc """
-  Adds an all-different constraint. Does not validate variable names.
+  Creates an all-different constraint. Does not validate variable names.
 
   Each item can be a variable name (atom) or an `Expr` (single variable with
   a constant offset). Useful for diagonal constraints:
 
-      CpSat.all_different(model, Enum.with_index(queens, fn q, i -> CpSat.expr(q + i) end))
+      CpSat.all_different(Enum.map(board_range, fn i -> CpSat.expr(:"q\#{i}" + i) end))
+
+  Returns a `Constraint` struct that can be collected into a model.
+  """
+  def all_different(items) when is_list(items) do
+    name_offsets = expand_all_different_items(items)
+    %Constraint{type: :all_different, data: name_offsets}
+  end
+
+  @doc """
+  Adds an all-different constraint to a model. Does not validate variable names.
 
   Use `all_different!/2` to validate immediately.
   """
@@ -173,7 +187,9 @@ defmodule OrTools.CpSat do
   end
 
   @doc "Constrains exactly one of the given boolean variables to be true."
-  def exactly_one(var_names) when is_list(var_names), do: {:exactly_one, var_names}
+  def exactly_one(var_names) when is_list(var_names) do
+    %Constraint{type: :exactly_one, data: var_names}
+  end
 
   def exactly_one(%__MODULE__{} = model, var_names) when is_list(var_names) do
     %{model | constraints: model.constraints ++ [{:exactly_one, var_names}]}
@@ -186,7 +202,9 @@ defmodule OrTools.CpSat do
   end
 
   @doc "Constrains at most one of the given boolean variables to be true."
-  def at_most_one(var_names) when is_list(var_names), do: {:at_most_one, var_names}
+  def at_most_one(var_names) when is_list(var_names) do
+    %Constraint{type: :at_most_one, data: var_names}
+  end
 
   def at_most_one(%__MODULE__{} = model, var_names) when is_list(var_names) do
     %{model | constraints: model.constraints ++ [{:at_most_one, var_names}]}
@@ -199,7 +217,9 @@ defmodule OrTools.CpSat do
   end
 
   @doc "Constrains at least one of the given boolean variables to be true."
-  def at_least_one(var_names) when is_list(var_names), do: {:at_least_one, var_names}
+  def at_least_one(var_names) when is_list(var_names) do
+    %Constraint{type: :at_least_one, data: var_names}
+  end
 
   def at_least_one(%__MODULE__{} = model, var_names) when is_list(var_names) do
     %{model | constraints: model.constraints ++ [{:at_least_one, var_names}]}
@@ -212,7 +232,9 @@ defmodule OrTools.CpSat do
   end
 
   @doc "Constrains the boolean AND of the given variables to be true."
-  def bool_and(var_names) when is_list(var_names), do: {:bool_and, var_names}
+  def bool_and(var_names) when is_list(var_names) do
+    %Constraint{type: :bool_and, data: var_names}
+  end
 
   def bool_and(%__MODULE__{} = model, var_names) when is_list(var_names) do
     %{model | constraints: model.constraints ++ [{:bool_and, var_names}]}
@@ -225,7 +247,9 @@ defmodule OrTools.CpSat do
   end
 
   @doc "Constrains the boolean OR of the given variables to be true."
-  def bool_or(var_names) when is_list(var_names), do: {:bool_or, var_names}
+  def bool_or(var_names) when is_list(var_names) do
+    %Constraint{type: :bool_or, data: var_names}
+  end
 
   def bool_or(%__MODULE__{} = model, var_names) when is_list(var_names) do
     %{model | constraints: model.constraints ++ [{:bool_or, var_names}]}
@@ -238,7 +262,9 @@ defmodule OrTools.CpSat do
   end
 
   @doc "Constrains the boolean XOR of the given variables to be true."
-  def bool_xor(var_names) when is_list(var_names), do: {:bool_xor, var_names}
+  def bool_xor(var_names) when is_list(var_names) do
+    %Constraint{type: :bool_xor, data: var_names}
+  end
 
   def bool_xor(%__MODULE__{} = model, var_names) when is_list(var_names) do
     %{model | constraints: model.constraints ++ [{:bool_xor, var_names}]}
@@ -1073,21 +1099,68 @@ defmodule OrTools.CpSat do
   defp quote_collect_terms_coeff(coeff), do: coeff
 
   defimpl Collectable do
+    alias OrTools.CpSat.Constraint
+
     def into(model) do
       fun = fn
-        acc, {:cont, {:bool_var, name}} -> OrTools.CpSat.bool_var(acc, name)
-        acc, {:cont, {terms, op, rhs}} -> OrTools.CpSat.add_constraint(acc, terms, op, rhs)
-        acc, {:cont, {:exactly_one, names}} -> OrTools.CpSat.exactly_one(acc, names)
-        acc, {:cont, {:at_most_one, names}} -> OrTools.CpSat.at_most_one(acc, names)
-        acc, {:cont, {:at_least_one, names}} -> OrTools.CpSat.at_least_one(acc, names)
-        acc, {:cont, {:bool_and, names}} -> OrTools.CpSat.bool_and(acc, names)
-        acc, {:cont, {:bool_or, names}} -> OrTools.CpSat.bool_or(acc, names)
-        acc, {:cont, {:bool_xor, names}} -> OrTools.CpSat.bool_xor(acc, names)
-        acc, :done -> acc
-        _acc, :halt -> :ok
+        # Constraint struct - convert to tuple and add
+        acc, {:cont, %Constraint{} = c} ->
+          add_constraint_item(acc, Constraint.to_tuple(c))
+
+        # List of Constraint structs
+        acc, {:cont, constraints} when is_list(constraints) ->
+          Enum.reduce(constraints, acc, fn
+            %Constraint{} = c, m -> add_constraint_item(m, Constraint.to_tuple(c))
+            tuple, m when is_tuple(tuple) -> add_constraint_item(m, tuple)
+          end)
+
+        # Backward compat: raw tuples
+        acc, {:cont, {:bool_var, name}} ->
+          OrTools.CpSat.bool_var(acc, name)
+
+        acc, {:cont, tuple} when is_tuple(tuple) ->
+          add_constraint_item(acc, tuple)
+
+        acc, :done ->
+          acc
+
+        _acc, :halt ->
+          :ok
       end
 
       {model, fun}
+    end
+
+    defp add_constraint_item(model, {terms, op, rhs}) when is_list(terms) do
+      OrTools.CpSat.add_constraint(model, terms, op, rhs)
+    end
+
+    defp add_constraint_item(model, {:exactly_one, names}) do
+      OrTools.CpSat.exactly_one(model, names)
+    end
+
+    defp add_constraint_item(model, {:at_most_one, names}) do
+      OrTools.CpSat.at_most_one(model, names)
+    end
+
+    defp add_constraint_item(model, {:at_least_one, names}) do
+      OrTools.CpSat.at_least_one(model, names)
+    end
+
+    defp add_constraint_item(model, {:bool_and, names}) do
+      OrTools.CpSat.bool_and(model, names)
+    end
+
+    defp add_constraint_item(model, {:bool_or, names}) do
+      OrTools.CpSat.bool_or(model, names)
+    end
+
+    defp add_constraint_item(model, {:bool_xor, names}) do
+      OrTools.CpSat.bool_xor(model, names)
+    end
+
+    defp add_constraint_item(model, {:all_different, name_offsets}) do
+      %{model | constraints: model.constraints ++ [{:all_different, name_offsets}]}
     end
   end
 end

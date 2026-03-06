@@ -107,7 +107,7 @@ defmodule OrTools.CpSatTest do
       assert result == %{status: :optimal, values: %{x: 1}, objective: 1.0}
     end
 
-    test "constraint/1 with for into: model" do
+    test "constrain/1 with for into: model" do
       vars = [:x, :y, :z]
 
       model =
@@ -118,7 +118,7 @@ defmodule OrTools.CpSatTest do
 
       model =
         for var <- vars, into: model do
-          CpSat.constraint(var <= 5)
+          CpSat.constrain(var <= 5)
         end
 
       result =
