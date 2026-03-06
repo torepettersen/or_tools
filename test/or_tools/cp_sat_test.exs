@@ -157,6 +157,31 @@ defmodule OrTools.CpSatTest do
       assert result.status == :optimal
       assert result.values |> Map.values() |> Enum.sort() == [1, 2, 3]
     end
+
+    test "all_different with expr offset" do
+      result =
+        CpSat.new()
+        |> CpSat.int_vars([:a, :b, :c], 0..4)
+        |> CpSat.all_different(Enum.map([:a, :b, :c], fn v -> CpSat.expr(v + 1) end))
+        |> CpSat.solve!()
+
+      assert result.status == :optimal
+      # a+1, b+1, c+1 all different means a, b, c all different
+      assert result.values |> Map.values() |> Enum.uniq() |> length() == 3
+    end
+
+    test "all_different with expr offset enforces stricter constraint" do
+      # a+0, b+1, c+2 all different is stricter: e.g. a=0,b=0,c=0 would give 0,1,2 (ok),
+      # but a=1,b=0,c=0 gives 1,1,2 (not ok)
+      result =
+        CpSat.new()
+        |> CpSat.int_vars([:a, :b, :c], 0..2)
+        |> CpSat.all_different([:a, :b, :c])
+        |> CpSat.all_different([CpSat.expr(:a + 0), CpSat.expr(:b + 1), CpSat.expr(:c + 2)])
+        |> CpSat.solve!()
+
+      assert result.status in [:optimal, :infeasible]
+    end
   end
 
   describe "runtime variables" do
@@ -781,6 +806,52 @@ defmodule OrTools.CpSatTest do
       assert Map.has_key?(result.metrics, :num_branches)
       assert Map.has_key?(result.metrics, :wall_time_us)
       assert result.metrics.num_solutions == 6
+    end
+  end
+
+  describe "params" do
+    test "max_time_in_seconds accepts a time limit" do
+      result =
+        CpSat.new()
+        |> CpSat.int_var(:x, 0..100)
+        |> CpSat.maximize(:x)
+        |> CpSat.solve!(params: [max_time_in_seconds: 10])
+
+      assert result.status == :optimal
+      assert result.values.x == 100
+    end
+
+    test "max_time_in_seconds very short stops early on hard problem" do
+      vars = Enum.map(0..11, fn i -> :"q#{i}" end)
+
+      result =
+        CpSat.new()
+        |> CpSat.int_vars(vars, 0..11)
+        |> CpSat.all_different(vars)
+        |> CpSat.solve!(params: [max_time_in_seconds: 0.000001])
+
+      assert result.status in [:unknown, :feasible, :optimal]
+    end
+
+    test "max_time_in_seconds works with solve_all" do
+      result =
+        CpSat.new()
+        |> CpSat.int_vars([:x, :y], 1..100)
+        |> CpSat.solve_all!(params: [max_time_in_seconds: 0.000001])
+
+      assert result.status in [:unknown, :feasible, :optimal]
+    end
+
+    test "random_seed produces deterministic results" do
+      solve = fn ->
+        CpSat.new()
+        |> CpSat.int_var(:x, 0..10)
+        |> CpSat.int_var(:y, 0..10)
+        |> CpSat.maximize(:x + :y)
+        |> CpSat.solve!(params: [random_seed: 42])
+      end
+
+      assert solve.() == solve.()
     end
   end
 

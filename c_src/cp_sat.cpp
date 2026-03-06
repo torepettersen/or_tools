@@ -28,8 +28,8 @@ struct LinearConstraint {
   int64_t rhs;
 };
 
-// All-different constraint: {:all_different, [var_name, ...]}
-// We'll handle this as a variant in the constraint list
+// All-different constraint: {:all_different, [{var_name, offset}, ...]}
+// Offsets are applied via LinearExpr, so no auxiliary variables are needed.
 
 // Objective: {:maximize | :minimize, [{var, coeff}, ...]}
 struct Objective {
@@ -49,6 +49,38 @@ struct BuiltModel {
   std::map<std::string, or_sat::IntVar> var_map;
   std::vector<std::pair<std::string, or_sat::IntVar>> var_order;
 };
+
+// Apply a keyword list of solver parameters to a SatParameters object.
+// Unknown keys are silently ignored.
+static void apply_params(
+    ErlNifEnv *env,
+    or_sat::SatParameters &parameters,
+    fine::Term params_term) {
+
+  auto params = fine::decode<std::vector<std::tuple<fine::Atom, fine::Term>>>(env, params_term);
+
+  for (const auto &[key, value] : params) {
+    if (key == "max_time_in_seconds") {
+      ErlNifSInt64 int_val;
+      double dbl_val;
+      if (enif_get_int64(env, value, &int_val)) {
+        dbl_val = static_cast<double>(int_val);
+      } else {
+        dbl_val = fine::decode<double>(env, value);
+      }
+      parameters.set_max_time_in_seconds(dbl_val);
+    } else if (key == "max_number_of_conflicts") {
+      parameters.set_max_number_of_conflicts(fine::decode<int64_t>(env, value));
+    } else if (key == "num_workers") {
+      parameters.set_num_workers(static_cast<int32_t>(fine::decode<int64_t>(env, value)));
+    } else if (key == "random_seed") {
+      parameters.set_random_seed(static_cast<int32_t>(fine::decode<int64_t>(env, value)));
+    } else if (key == "log_search_progress") {
+      auto atom = fine::decode<fine::Atom>(env, value);
+      parameters.set_log_search_progress(atom == "true");
+    }
+  }
+}
 
 static fine::Atom status_to_atom(or_sat::CpSolverStatus status) {
   switch (status) {
@@ -99,50 +131,55 @@ static BuiltModel build_model(
 
     if (arity == 2) {
       auto tag = fine::decode<fine::Atom>(env, elems[0]);
-      auto names = fine::decode<std::vector<fine::Atom>>(env, elems[1]);
 
       if (tag == "all_different") {
-        std::vector<or_sat::IntVar> int_vars;
-        for (const auto &n : names) {
-          int_vars.push_back(m.var_map.at(n.to_string()));
+        auto name_offsets =
+            fine::decode<std::vector<std::tuple<fine::Atom, int64_t>>>(env, elems[1]);
+        std::vector<or_sat::LinearExpr> exprs;
+        for (const auto &[name, offset] : name_offsets) {
+          exprs.push_back(
+              or_sat::LinearExpr(m.var_map.at(name.to_string())) + offset);
         }
-        m.builder.AddAllDifferent(int_vars);
-      } else if (tag == "exactly_one") {
-        std::vector<or_sat::BoolVar> bools;
-        for (const auto &n : names) {
-          bools.push_back(m.var_map.at(n.to_string()).ToBoolVar());
+        m.builder.AddAllDifferent(exprs);
+      } else {
+        auto names = fine::decode<std::vector<fine::Atom>>(env, elems[1]);
+        if (tag == "exactly_one") {
+          std::vector<or_sat::BoolVar> bools;
+          for (const auto &n : names) {
+            bools.push_back(m.var_map.at(n.to_string()).ToBoolVar());
+          }
+          m.builder.AddExactlyOne(bools);
+        } else if (tag == "at_most_one") {
+          std::vector<or_sat::BoolVar> bools;
+          for (const auto &n : names) {
+            bools.push_back(m.var_map.at(n.to_string()).ToBoolVar());
+          }
+          m.builder.AddAtMostOne(bools);
+        } else if (tag == "at_least_one") {
+          std::vector<or_sat::BoolVar> bools;
+          for (const auto &n : names) {
+            bools.push_back(m.var_map.at(n.to_string()).ToBoolVar());
+          }
+          m.builder.AddAtLeastOne(bools);
+        } else if (tag == "bool_and") {
+          std::vector<or_sat::BoolVar> bools;
+          for (const auto &n : names) {
+            bools.push_back(m.var_map.at(n.to_string()).ToBoolVar());
+          }
+          m.builder.AddBoolAnd(bools);
+        } else if (tag == "bool_or") {
+          std::vector<or_sat::BoolVar> bools;
+          for (const auto &n : names) {
+            bools.push_back(m.var_map.at(n.to_string()).ToBoolVar());
+          }
+          m.builder.AddBoolOr(bools);
+        } else if (tag == "bool_xor") {
+          std::vector<or_sat::BoolVar> bools;
+          for (const auto &n : names) {
+            bools.push_back(m.var_map.at(n.to_string()).ToBoolVar());
+          }
+          m.builder.AddBoolXor(bools);
         }
-        m.builder.AddExactlyOne(bools);
-      } else if (tag == "at_most_one") {
-        std::vector<or_sat::BoolVar> bools;
-        for (const auto &n : names) {
-          bools.push_back(m.var_map.at(n.to_string()).ToBoolVar());
-        }
-        m.builder.AddAtMostOne(bools);
-      } else if (tag == "at_least_one") {
-        std::vector<or_sat::BoolVar> bools;
-        for (const auto &n : names) {
-          bools.push_back(m.var_map.at(n.to_string()).ToBoolVar());
-        }
-        m.builder.AddAtLeastOne(bools);
-      } else if (tag == "bool_and") {
-        std::vector<or_sat::BoolVar> bools;
-        for (const auto &n : names) {
-          bools.push_back(m.var_map.at(n.to_string()).ToBoolVar());
-        }
-        m.builder.AddBoolAnd(bools);
-      } else if (tag == "bool_or") {
-        std::vector<or_sat::BoolVar> bools;
-        for (const auto &n : names) {
-          bools.push_back(m.var_map.at(n.to_string()).ToBoolVar());
-        }
-        m.builder.AddBoolOr(bools);
-      } else if (tag == "bool_xor") {
-        std::vector<or_sat::BoolVar> bools;
-        for (const auto &n : names) {
-          bools.push_back(m.var_map.at(n.to_string()).ToBoolVar());
-        }
-        m.builder.AddBoolXor(bools);
       }
     } else if (arity == 4) {
       auto tag = fine::decode<fine::Atom>(env, elems[0]);
@@ -267,18 +304,25 @@ static std::map<fine::Atom, int64_t> extract_values(
   return values;
 }
 
-// solve(vars, constraints, objective_or_nil)
+// solve(vars, constraints, objective_or_nil, params)
 //
 // Returns: {status, %{name => value}, objective_value}
 std::tuple<fine::Atom, std::map<fine::Atom, int64_t>, double> solve(
     ErlNifEnv *env,
     std::vector<std::tuple<fine::Atom, int64_t, int64_t>> vars,
     fine::Term constraints_term,
-    fine::Term objective_term) {
+    fine::Term objective_term,
+    fine::Term params_term) {
 
   auto m = build_model(env, vars, constraints_term, objective_term);
 
-  auto response = or_sat::Solve(m.builder.Build());
+  or_sat::SatParameters parameters;
+  apply_params(env, parameters, params_term);
+
+  or_sat::Model model;
+  model.Add(or_sat::NewSatParameters(parameters));
+
+  auto response = or_sat::SolveCpModel(m.builder.Build(), &model);
 
   auto status_atom = status_to_atom(response.status());
 
@@ -305,7 +349,7 @@ static std::map<fine::Atom, int64_t> extract_stats(
   return stats;
 }
 
-// solve_all(vars, constraints, objective_or_nil, callback_pid_or_nil)
+// solve_all(vars, constraints, objective_or_nil, callback_pid_or_nil, params)
 //
 // Returns: {status, [{%{name => value}, objective}, ...], %{stat => value}}
 //
@@ -320,7 +364,8 @@ solve_all(
     std::vector<std::tuple<fine::Atom, int64_t, int64_t>> vars,
     fine::Term constraints_term,
     fine::Term objective_term,
-    fine::Term callback_pid_term) {
+    fine::Term callback_pid_term,
+    fine::Term params_term) {
 
   auto m = build_model(env, vars, constraints_term, objective_term);
 
@@ -333,8 +378,9 @@ solve_all(
     callback_pid = fine::decode<ErlNifPid>(env, callback_pid_term);
   }
 
-  // Configure parameters to enumerate all solutions
+  // Configure parameters: apply user params first, then force enumerate_all_solutions
   or_sat::SatParameters parameters;
+  apply_params(env, parameters, params_term);
   parameters.set_enumerate_all_solutions(true);
 
   // Collect solutions via observer callback.

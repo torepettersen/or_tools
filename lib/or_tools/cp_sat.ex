@@ -137,10 +137,16 @@ defmodule OrTools.CpSat do
   @doc """
   Adds an all-different constraint. Does not validate variable names.
 
+  Each item can be a variable name (atom) or an `Expr` (single variable with
+  a constant offset). Useful for diagonal constraints:
+
+      CpSat.all_different(model, Enum.with_index(queens, fn q, i -> CpSat.expr(q + i) end))
+
   Use `all_different!/2` to validate immediately.
   """
-  def all_different(%__MODULE__{} = model, var_names) when is_list(var_names) do
-    %{model | constraints: model.constraints ++ [{:all_different, var_names}]}
+  def all_different(%__MODULE__{} = model, items) when is_list(items) do
+    name_offsets = expand_all_different_items(items)
+    %{model | constraints: model.constraints ++ [{:all_different, name_offsets}]}
   end
 
   @doc """
@@ -148,9 +154,20 @@ defmodule OrTools.CpSat do
 
   Raises `ArgumentError` if any variable name is not declared.
   """
-  def all_different!(%__MODULE__{} = model, var_names) when is_list(var_names) do
-    validate_var_names!(model, var_names)
-    all_different(model, var_names)
+  def all_different!(%__MODULE__{} = model, items) when is_list(items) do
+    plain_names = Enum.map(items, fn
+      name when is_atom(name) -> name
+      %Expr{terms: [{name, 1}], special: []} -> name
+    end)
+    validate_var_names!(model, plain_names)
+    all_different(model, items)
+  end
+
+  defp expand_all_different_items(items) do
+    Enum.map(items, fn
+      name when is_atom(name) -> {name, 0}
+      %Expr{terms: [{name, 1}], const: offset, special: []} -> {name, offset}
+    end)
   end
 
   @doc "Constrains exactly one of the given boolean variables to be true."
@@ -482,12 +499,21 @@ defmodule OrTools.CpSat do
   Validates and solves the model. Returns `{:ok, result}` or `{:error, reason}`.
 
   Always validates variable names before calling the solver.
+
+  ## Options
+
+      CpSat.solve(model, params: [max_time_in_seconds: 10.0, num_workers: 4])
+
+  Supported params: `max_time_in_seconds`, `max_number_of_conflicts`, `num_workers`,
+  `random_seed`, `log_search_progress`.
   """
-  def solve(%__MODULE__{} = model) do
+  def solve(%__MODULE__{} = model, opts \\ []) do
     case validate(model) do
       :ok ->
+        params = Keyword.get(opts, :params, [])
+
         {status, values, objective} =
-          OrTools.NIF.solve(model.vars, model.constraints, model.objective)
+          OrTools.NIF.solve(model.vars, model.constraints, model.objective, params)
 
         visible_values = filter_internal_values(values)
 
@@ -500,9 +526,11 @@ defmodule OrTools.CpSat do
 
   @doc """
   Validates and solves the model. Returns the result or raises on error.
+
+  See `solve/2` for options.
   """
-  def solve!(%__MODULE__{} = model) do
-    case solve(model) do
+  def solve!(%__MODULE__{} = model, opts \\ []) do
+    case solve(model, opts) do
       {:ok, result} -> result
       {:error, message} -> raise ArgumentError, message
     end
@@ -538,6 +566,7 @@ defmodule OrTools.CpSat do
   def solve_all(%__MODULE__{} = model, opts \\ []) do
     on_solution = Keyword.get(opts, :on_solution)
     init = Keyword.get(opts, :init, fn variables -> variables end)
+    params = Keyword.get(opts, :params, [])
 
     handler_opts =
       if on_solution do
@@ -545,10 +574,10 @@ defmodule OrTools.CpSat do
         {init.(var_names), on_solution}
       end
 
-    do_solve_all(model, handler_opts)
+    do_solve_all(model, handler_opts, params)
   end
 
-  defp do_solve_all(model, handler_opts) do
+  defp do_solve_all(model, handler_opts, params) do
     case validate(model) do
       :ok ->
         callback_pid =
@@ -558,7 +587,7 @@ defmodule OrTools.CpSat do
           end
 
         {status, raw_solutions, metrics} =
-          OrTools.NIF.solve_all(model.vars, model.constraints, model.objective, callback_pid)
+          OrTools.NIF.solve_all(model.vars, model.constraints, model.objective, callback_pid, params)
 
         final_state =
           if callback_pid do
@@ -678,9 +707,13 @@ defmodule OrTools.CpSat do
     end
   end
 
+  defp validate_constraint({:all_different, name_offsets}, declared) do
+    names = Enum.map(name_offsets, &elem(&1, 0))
+    check_var_names(names, declared)
+  end
+
   defp validate_constraint({tag, var_names}, declared)
        when tag in [
-              :all_different,
               :exactly_one,
               :at_most_one,
               :at_least_one,

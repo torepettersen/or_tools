@@ -8,8 +8,8 @@ defmodule OrTools.NIF do
     :erlang.load_nif(path, 0)
   end
 
-  def solve(_vars, _constraints, _objective), do: :erlang.nif_error(:nif_not_loaded)
+  def solve(_vars, _constraints, _objective, _params), do: :erlang.nif_error(:nif_not_loaded)
 
-  def solve_all(_vars, _constraints, _objective, _callback_pid),
+  def solve_all(_vars, _constraints, _objective, _callback_pid, _params),
     do: :erlang.nif_error(:nif_not_loaded)
 end
