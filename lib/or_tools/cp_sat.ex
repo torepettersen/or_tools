@@ -24,6 +24,7 @@ defmodule OrTools.CpSat do
 
   alias OrTools.CpSat.Constraint
   alias OrTools.CpSat.Expr
+  alias OrTools.CpSat.Variable
 
   defmacro __using__(_opts) do
     quote do
@@ -40,8 +41,10 @@ defmodule OrTools.CpSat do
   @doc "Creates a new empty model."
   def new, do: %__MODULE__{}
 
-  @doc "Adds a boolean (0/1) variable with the given name."
-  def bool_var(name) when is_atom(name), do: {:bool_var, name}
+  @doc "Creates a boolean (0/1) variable with the given name."
+  def bool_var(name) when is_atom(name) do
+    %Variable{type: :bool, name: name}
+  end
 
   def bool_var(%__MODULE__{} = model, name) when is_atom(name) do
     %{model | vars: model.vars ++ [{name, 0, 1}]}
@@ -53,7 +56,16 @@ defmodule OrTools.CpSat do
     %{model | vars: model.vars ++ new_vars}
   end
 
-  @doc "Adds an integer variable with the given name and range."
+  @doc "Creates an integer variable with the given name and range."
+  def int_var(name, %Range{first: lb, last: ub}) when is_atom(name) do
+    %Variable{type: :int, name: name, lb: lb, ub: ub}
+  end
+
+  def int_var(name, lb, ub) when is_atom(name) and is_integer(lb) and is_integer(ub) do
+    %Variable{type: :int, name: name, lb: lb, ub: ub}
+  end
+
+  @doc "Adds an integer variable to a model."
   def int_var(%__MODULE__{} = model, name, %Range{first: lb, last: ub}) when is_atom(name) do
     %{model | vars: model.vars ++ [{name, lb, ub}]}
   end
@@ -1100,16 +1112,22 @@ defmodule OrTools.CpSat do
 
   defimpl Collectable do
     alias OrTools.CpSat.Constraint
+    alias OrTools.CpSat.Variable
 
     def into(model) do
       fun = fn
-        # Constraint struct - convert to tuple and add
+        # Variable struct
+        acc, {:cont, %Variable{} = v} ->
+          add_var(acc, Variable.to_tuple(v))
+
+        # Constraint struct
         acc, {:cont, %Constraint{} = c} ->
           add_constraint_item(acc, Constraint.to_tuple(c))
 
-        # List of Constraint structs
-        acc, {:cont, constraints} when is_list(constraints) ->
-          Enum.reduce(constraints, acc, fn
+        # List of Variable or Constraint structs
+        acc, {:cont, items} when is_list(items) ->
+          Enum.reduce(items, acc, fn
+            %Variable{} = v, m -> add_var(m, Variable.to_tuple(v))
             %Constraint{} = c, m -> add_constraint_item(m, Constraint.to_tuple(c))
             tuple, m when is_tuple(tuple) -> add_constraint_item(m, tuple)
           end)
@@ -1129,6 +1147,10 @@ defmodule OrTools.CpSat do
       end
 
       {model, fun}
+    end
+
+    defp add_var(model, {name, lb, ub}) do
+      %{model | vars: model.vars ++ [{name, lb, ub}]}
     end
 
     defp add_constraint_item(model, {terms, op, rhs}) when is_list(terms) do
