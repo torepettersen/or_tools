@@ -104,8 +104,6 @@ defmodule OrTools.CpSat do
   @doc """
   Adds a linear constraint. Does not validate variable names.
 
-  Use `constrain!/2` to validate immediately.
-
   ## Examples
 
       CpSat.constrain(model, 2 * :x + 7 * :y <= 50)
@@ -997,15 +995,7 @@ defmodule OrTools.CpSat do
           Enum.reduce(items, acc, fn
             %Variable{} = variable, model -> Map.update!(model, :vars, &(&1 ++ [variable]))
             %Constraint{} = constraint, model -> Map.update!(model, :constraints, &(&1 ++ [constraint]))
-            tuple, model when is_tuple(tuple) -> add_constraint_tuple(model, tuple)
           end)
-
-        # Backward compat: raw tuples
-        acc, {:cont, {:bool_var, name}} ->
-          OrTools.CpSat.bool_var(acc, name)
-
-        acc, {:cont, tuple} when is_tuple(tuple) ->
-          add_constraint_tuple(acc, tuple)
 
         acc, :done ->
           acc
@@ -1017,37 +1007,5 @@ defmodule OrTools.CpSat do
       {model, fun}
     end
 
-    # Handle raw tuples for backward compatibility
-    defp add_constraint_tuple(model, {terms, op, rhs}) when is_list(terms) do
-      OrTools.CpSat.add_constraint(model, terms, op, rhs)
-    end
-
-    defp add_constraint_tuple(model, {:exactly_one, names}) do
-      OrTools.CpSat.exactly_one(model, names)
-    end
-
-    defp add_constraint_tuple(model, {:at_most_one, names}) do
-      OrTools.CpSat.at_most_one(model, names)
-    end
-
-    defp add_constraint_tuple(model, {:at_least_one, names}) do
-      OrTools.CpSat.at_least_one(model, names)
-    end
-
-    defp add_constraint_tuple(model, {:bool_and, names}) do
-      OrTools.CpSat.bool_and(model, names)
-    end
-
-    defp add_constraint_tuple(model, {:bool_or, names}) do
-      OrTools.CpSat.bool_or(model, names)
-    end
-
-    defp add_constraint_tuple(model, {:bool_xor, names}) do
-      OrTools.CpSat.bool_xor(model, names)
-    end
-
-    defp add_constraint_tuple(model, {:all_different, name_offsets}) do
-      Map.update!(model, :constraints, &(&1 ++ [%Constraint{type: :all_different, data: name_offsets}]))
-    end
   end
 end
