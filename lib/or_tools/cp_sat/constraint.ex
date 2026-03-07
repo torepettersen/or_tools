@@ -22,11 +22,21 @@ defmodule OrTools.CpSat.Constraint do
   @doc false
   def to_tuple(%__MODULE__{type: :linear, data: {terms, op, rhs}}), do: {terms, op, rhs}
   # Internal constraints used by flatten_expr
-  def to_tuple(%__MODULE__{type: :abs_eq, data: {target, terms, const}}), do: {:abs_eq, target, terms, const}
-  def to_tuple(%__MODULE__{type: :mul_eq, data: {target, var_names}}), do: {:mul_eq, target, var_names}
-  def to_tuple(%__MODULE__{type: :min_eq, data: {target, var_names}}), do: {:min_eq, target, var_names}
-  def to_tuple(%__MODULE__{type: :max_eq, data: {target, var_names}}), do: {:max_eq, target, var_names}
-  def to_tuple(%__MODULE__{type: :div_eq, data: {target, dividend, divisor}}), do: {:div_eq, target, dividend, divisor}
+  def to_tuple(%__MODULE__{type: :abs_eq, data: {target, terms, const}}),
+    do: {:abs_eq, target, terms, const}
+
+  def to_tuple(%__MODULE__{type: :mul_eq, data: {target, var_names}}),
+    do: {:mul_eq, target, var_names}
+
+  def to_tuple(%__MODULE__{type: :min_eq, data: {target, var_names}}),
+    do: {:min_eq, target, var_names}
+
+  def to_tuple(%__MODULE__{type: :max_eq, data: {target, var_names}}),
+    do: {:max_eq, target, var_names}
+
+  def to_tuple(%__MODULE__{type: :div_eq, data: {target, dividend, divisor}}),
+    do: {:div_eq, target, dividend, divisor}
+
   def to_tuple(%__MODULE__{type: type, data: data}), do: {type, data}
 
   defimpl Inspect do

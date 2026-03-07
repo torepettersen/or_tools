@@ -61,7 +61,8 @@ defmodule OrTools.CpSat do
     int_var(name, lower_bound, upper_bound)
   end
 
-  def int_var(name, lower_bound, upper_bound) when is_atom(name) and is_integer(lower_bound) and is_integer(upper_bound) do
+  def int_var(name, lower_bound, upper_bound)
+      when is_atom(name) and is_integer(lower_bound) and is_integer(upper_bound) do
     %Variable{type: :int, name: name, lower_bound: lower_bound, upper_bound: upper_bound}
   end
 
@@ -121,7 +122,11 @@ defmodule OrTools.CpSat do
 
   @doc false
   def add_constraint(%__MODULE__{} = model, terms, op, rhs) do
-    Map.update!(model, :constraints, &(&1 ++ [%Constraint{type: :linear, data: {terms, op, rhs}}]))
+    Map.update!(
+      model,
+      :constraints,
+      &(&1 ++ [%Constraint{type: :linear, data: {terms, op, rhs}}])
+    )
   end
 
   @doc """
@@ -262,9 +267,14 @@ defmodule OrTools.CpSat do
   # Linearizes an %Expr{} into {model, [{atom, int}]} by converting special terms
   # into auxiliary variables and constraints.
   defp flatten_expr(model, %Expr{terms: terms, const: _const, special: special}) do
-    var_bounds = Map.new(model.vars, fn %Variable{name: name, lower_bound: lower_bound, upper_bound: upper_bound} ->
-      {name, {lower_bound || 0, upper_bound || 1}}
-    end)
+    var_bounds =
+      Map.new(model.vars, fn %Variable{
+                               name: name,
+                               lower_bound: lower_bound,
+                               upper_bound: upper_bound
+                             } ->
+        {name, {lower_bound || 0, upper_bound || 1}}
+      end)
 
     Enum.reduce(special, {model, terms}, fn
       {:abs, %Expr{} = inner, coeff}, {model, acc} ->
@@ -278,7 +288,12 @@ defmodule OrTools.CpSat do
 
         model = int_var(model, abs_name, 0, max_bound)
 
-        model = Map.update!(model, :constraints, &(&1 ++ [%Constraint{type: :abs_eq, data: {abs_name, inner.terms, inner.const}}]))
+        model =
+          Map.update!(
+            model,
+            :constraints,
+            &(&1 ++ [%Constraint{type: :abs_eq, data: {abs_name, inner.terms, inner.const}}])
+          )
 
         {model, [{abs_name, coeff} | acc]}
 
@@ -309,25 +324,40 @@ defmodule OrTools.CpSat do
 
               eq_terms = base.terms ++ [{aux_name, -1}]
 
-              model = Map.update!(model, :constraints, &(&1 ++ [%Constraint{type: :linear, data: {eq_terms, :==, -base.const}}]))
+              model =
+                Map.update!(
+                  model,
+                  :constraints,
+                  &(&1 ++ [%Constraint{type: :linear, data: {eq_terms, :==, -base.const}}])
+                )
 
               {model, var_bounds, aux_name}
           end
 
         # Chain: aux1 = source * source, aux2 = aux1 * source, ...
         {model, _var_bounds, result_var} =
-          Enum.reduce(2..exponent, {model, var_bounds, source_var}, fn i, {model, variable_bounds, prev_var} ->
+          Enum.reduce(2..exponent, {model, var_bounds, source_var}, fn i,
+                                                                       {model, variable_bounds,
+                                                                        prev_var} ->
             pow_name = :"__pow_#{:erlang.unique_integer([:positive])}"
 
             {prev_lower, prev_upper} = Map.get(variable_bounds, prev_var, {0, 0})
             {src_lower, src_upper} = Map.get(variable_bounds, source_var, {0, 0})
 
-            products = [prev_lower * src_lower, prev_lower * src_upper, prev_upper * src_lower, prev_upper * src_upper]
+            products = [
+              prev_lower * src_lower,
+              prev_lower * src_upper,
+              prev_upper * src_lower,
+              prev_upper * src_upper
+            ]
+
             pow_lower_bound = Enum.min(products)
             pow_upper_bound = Enum.max(products)
 
             model = int_var(model, pow_name, pow_lower_bound, pow_upper_bound)
-            variable_bounds = Map.put(variable_bounds, pow_name, {pow_lower_bound, pow_upper_bound})
+
+            variable_bounds =
+              Map.put(variable_bounds, pow_name, {pow_lower_bound, pow_upper_bound})
 
             factors =
               if i > 2 do
@@ -336,7 +366,12 @@ defmodule OrTools.CpSat do
                 [source_var, source_var]
               end
 
-            model = Map.update!(model, :constraints, &(&1 ++ [%Constraint{type: :mul_eq, data: {pow_name, factors}}]))
+            model =
+              Map.update!(
+                model,
+                :constraints,
+                &(&1 ++ [%Constraint{type: :mul_eq, data: {pow_name, factors}}])
+              )
 
             {model, variable_bounds, pow_name}
           end)
@@ -354,7 +389,12 @@ defmodule OrTools.CpSat do
         mul_name = :"__mul_#{:erlang.unique_integer([:positive])}"
         model = int_var(model, mul_name, Enum.min(products), Enum.max(products))
 
-        model = Map.update!(model, :constraints, &(&1 ++ [%Constraint{type: :mul_eq, data: {mul_name, [left_var, right_var]}}]))
+        model =
+          Map.update!(
+            model,
+            :constraints,
+            &(&1 ++ [%Constraint{type: :mul_eq, data: {mul_name, [left_var, right_var]}}])
+          )
 
         {model, [{mul_name, coeff} | acc]}
 
@@ -371,7 +411,12 @@ defmodule OrTools.CpSat do
             Enum.min_by(bounds, &elem(&1, 1)) |> elem(1)
           )
 
-        model = Map.update!(model, :constraints, &(&1 ++ [%Constraint{type: :min_eq, data: {min_name, var_names}}]))
+        model =
+          Map.update!(
+            model,
+            :constraints,
+            &(&1 ++ [%Constraint{type: :min_eq, data: {min_name, var_names}}])
+          )
 
         {model, [{min_name, coeff} | acc]}
 
@@ -388,7 +433,12 @@ defmodule OrTools.CpSat do
             Enum.max_by(bounds, &elem(&1, 1)) |> elem(1)
           )
 
-        model = Map.update!(model, :constraints, &(&1 ++ [%Constraint{type: :max_eq, data: {max_name, var_names}}]))
+        model =
+          Map.update!(
+            model,
+            :constraints,
+            &(&1 ++ [%Constraint{type: :max_eq, data: {max_name, var_names}}])
+          )
 
         {model, [{max_name, coeff} | acc]}
 
@@ -400,12 +450,20 @@ defmodule OrTools.CpSat do
         {divisor_lower, divisor_upper} = Map.get(var_bounds, divisor_var, {1, 1})
 
         quotients =
-          for n <- [dividend_lower, dividend_upper], d <- [divisor_lower, divisor_upper], d != 0, do: Kernel.div(n, d)
+          for n <- [dividend_lower, dividend_upper],
+              d <- [divisor_lower, divisor_upper],
+              d != 0,
+              do: Kernel.div(n, d)
 
         div_name = :"__div_#{:erlang.unique_integer([:positive])}"
         model = int_var(model, div_name, Enum.min(quotients), Enum.max(quotients))
 
-        model = Map.update!(model, :constraints, &(&1 ++ [%Constraint{type: :div_eq, data: {div_name, dividend_var, divisor_var}}]))
+        model =
+          Map.update!(
+            model,
+            :constraints,
+            &(&1 ++ [%Constraint{type: :div_eq, data: {div_name, dividend_var, divisor_var}}])
+          )
 
         {model, [{div_name, coeff} | acc]}
     end)
@@ -490,7 +548,11 @@ defmodule OrTools.CpSat do
 
     handler_opts =
       if on_solution do
-        var_names = model.vars |> Enum.map(fn %Variable{name: name} -> name end) |> Enum.reject(&internal_var?/1)
+        var_names =
+          model.vars
+          |> Enum.map(fn %Variable{name: name} -> name end)
+          |> Enum.reject(&internal_var?/1)
+
         {init.(var_names), on_solution}
       end
 
@@ -515,7 +577,14 @@ defmodule OrTools.CpSat do
         constraints_tuples = Enum.map(model.constraints, &Constraint.to_tuple/1)
 
         {status, raw_solutions, metrics} =
-          OrTools.NIF.solve_all(vars_tuples, constraints_tuples, model.objective, callback_pid, ctrl, params)
+          OrTools.NIF.solve_all(
+            vars_tuples,
+            constraints_tuples,
+            model.objective,
+            callback_pid,
+            ctrl,
+            params
+          )
 
         final_state =
           if callback_pid do
@@ -669,7 +738,10 @@ defmodule OrTools.CpSat do
     check_var_names([target | var_names], declared)
   end
 
-  defp validate_constraint(%Constraint{type: :div_eq, data: {target, dividend, divisor}}, declared) do
+  defp validate_constraint(
+         %Constraint{type: :div_eq, data: {target, dividend, divisor}},
+         declared
+       ) do
     check_var_names([target, dividend, divisor], declared)
   end
 
@@ -945,7 +1017,10 @@ defmodule OrTools.CpSat do
           cond do
             is_atom(left_value) and is_atom(right_value) ->
               %OrTools.CpSat.Expr{
-                special: [{:mul, OrTools.CpSat.Expr.new(left_value), OrTools.CpSat.Expr.new(right_value), 1}]
+                special: [
+                  {:mul, OrTools.CpSat.Expr.new(left_value), OrTools.CpSat.Expr.new(right_value),
+                   1}
+                ]
               }
 
             is_atom(left_value) ->
@@ -993,8 +1068,11 @@ defmodule OrTools.CpSat do
         # List of Variable or Constraint structs
         acc, {:cont, items} when is_list(items) ->
           Enum.reduce(items, acc, fn
-            %Variable{} = variable, model -> Map.update!(model, :vars, &(&1 ++ [variable]))
-            %Constraint{} = constraint, model -> Map.update!(model, :constraints, &(&1 ++ [constraint]))
+            %Variable{} = variable, model ->
+              Map.update!(model, :vars, &(&1 ++ [variable]))
+
+            %Constraint{} = constraint, model ->
+              Map.update!(model, :constraints, &(&1 ++ [constraint]))
           end)
 
         acc, :done ->
@@ -1006,6 +1084,5 @@ defmodule OrTools.CpSat do
 
       {model, fun}
     end
-
   end
 end
