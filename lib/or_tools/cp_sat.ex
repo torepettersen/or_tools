@@ -318,27 +318,29 @@ defmodule OrTools.CpSat do
 
         # Chain: aux1 = source * source, aux2 = aux1 * source, ...
         {model, _var_bounds, result_var} =
-          Enum.reduce(2..exponent, {model, var_bounds, source_var}, fn i, {model, vb, prev_var} ->
+          Enum.reduce(2..exponent, {model, var_bounds, source_var}, fn i, {model, variable_bounds, prev_var} ->
             pow_name = :"__pow_#{:erlang.unique_integer([:positive])}"
 
-            {prev_lower, prev_upper} = Map.get(vb, prev_var, {0, 0})
-            {src_lower, src_upper} = Map.get(vb, source_var, {0, 0})
+            {prev_lower, prev_upper} = Map.get(variable_bounds, prev_var, {0, 0})
+            {src_lower, src_upper} = Map.get(variable_bounds, source_var, {0, 0})
 
             products = [prev_lower * src_lower, prev_lower * src_upper, prev_upper * src_lower, prev_upper * src_upper]
             pow_lower_bound = Enum.min(products)
             pow_upper_bound = Enum.max(products)
 
             model = int_var(model, pow_name, pow_lower_bound, pow_upper_bound)
-            vb = Map.put(vb, pow_name, {pow_lower_bound, pow_upper_bound})
+            variable_bounds = Map.put(variable_bounds, pow_name, {pow_lower_bound, pow_upper_bound})
 
             factors =
-              if i == 2,
-                do: [source_var, source_var],
-                else: [prev_var, source_var]
+              if i > 2 do
+                [prev_var, source_var]
+              else
+                [source_var, source_var]
+              end
 
             model = Map.update!(model, :constraints, &(&1 ++ [%Constraint{type: :mul_eq, data: {pow_name, factors}}]))
 
-            {model, vb, pow_name}
+            {model, variable_bounds, pow_name}
           end)
 
         {model, [{result_var, coeff} | acc]}
@@ -593,13 +595,7 @@ defmodule OrTools.CpSat do
   defp internal_var_prefixes(model) do
     model.vars
     |> Enum.map(fn %Variable{name: name} -> name end)
-    |> Enum.filter(fn name ->
-      s = Atom.to_string(name)
-
-      String.starts_with?(s, "__abs_") or String.starts_with?(s, "__pow_") or
-        String.starts_with?(s, "__mul_") or String.starts_with?(s, "__div_") or
-        String.starts_with?(s, "__min_") or String.starts_with?(s, "__max_")
-    end)
+    |> Enum.filter(&internal_var?/1)
     |> MapSet.new()
   end
 
@@ -608,11 +604,11 @@ defmodule OrTools.CpSat do
   end
 
   defp internal_var?(name) do
-    s = Atom.to_string(name)
+    name_string = Atom.to_string(name)
 
-    String.starts_with?(s, "__abs_") or String.starts_with?(s, "__pow_") or
-      String.starts_with?(s, "__mul_") or String.starts_with?(s, "__div_") or
-      String.starts_with?(s, "__min_") or String.starts_with?(s, "__max_")
+    String.starts_with?(name_string, "__abs_") or String.starts_with?(name_string, "__pow_") or
+      String.starts_with?(name_string, "__mul_") or String.starts_with?(name_string, "__div_") or
+      String.starts_with?(name_string, "__min_") or String.starts_with?(name_string, "__max_")
   end
 
   defp filter_internal_values(values) do
@@ -917,44 +913,48 @@ defmodule OrTools.CpSat do
         left_expr = Macro.escape(%Expr{terms: [{left, 1}]})
 
         quote do
-          r_val = unquote(right)
+          right_value = unquote(right)
 
-          if is_atom(r_val),
-            do: %OrTools.CpSat.Expr{
-              special: [{:mul, unquote(left_expr), OrTools.CpSat.Expr.new(r_val), 1}]
-            },
-            else: OrTools.CpSat.Expr.scale(unquote(left_expr), r_val)
+          if is_atom(right_value) do
+            %OrTools.CpSat.Expr{
+              special: [{:mul, unquote(left_expr), OrTools.CpSat.Expr.new(right_value), 1}]
+            }
+          else
+            OrTools.CpSat.Expr.scale(unquote(left_expr), right_value)
+          end
         end
 
       is_atom(right) ->
         right_expr = Macro.escape(%Expr{terms: [{right, 1}]})
 
         quote do
-          l_val = unquote(left)
+          left_value = unquote(left)
 
-          if is_atom(l_val),
-            do: %OrTools.CpSat.Expr{
-              special: [{:mul, OrTools.CpSat.Expr.new(l_val), unquote(right_expr), 1}]
-            },
-            else: OrTools.CpSat.Expr.scale(unquote(right_expr), l_val)
+          if is_atom(left_value) do
+            %OrTools.CpSat.Expr{
+              special: [{:mul, OrTools.CpSat.Expr.new(left_value), unquote(right_expr), 1}]
+            }
+          else
+            OrTools.CpSat.Expr.scale(unquote(right_expr), left_value)
+          end
         end
 
       true ->
         quote do
-          l_val = unquote(left)
-          r_val = unquote(right)
+          left_value = unquote(left)
+          right_value = unquote(right)
 
           cond do
-            is_atom(l_val) and is_atom(r_val) ->
+            is_atom(left_value) and is_atom(right_value) ->
               %OrTools.CpSat.Expr{
-                special: [{:mul, OrTools.CpSat.Expr.new(l_val), OrTools.CpSat.Expr.new(r_val), 1}]
+                special: [{:mul, OrTools.CpSat.Expr.new(left_value), OrTools.CpSat.Expr.new(right_value), 1}]
               }
 
-            is_atom(l_val) ->
-              OrTools.CpSat.Expr.scale(OrTools.CpSat.Expr.new(l_val), r_val)
+            is_atom(left_value) ->
+              OrTools.CpSat.Expr.scale(OrTools.CpSat.Expr.new(left_value), right_value)
 
             true ->
-              OrTools.CpSat.Expr.scale(OrTools.CpSat.Expr.new(r_val), l_val)
+              OrTools.CpSat.Expr.scale(OrTools.CpSat.Expr.new(right_value), left_value)
           end
         end
     end
@@ -976,7 +976,6 @@ defmodule OrTools.CpSat do
   end
 
   # Helper: extract coefficient value from AST (literal int or runtime expression)
-  defp quote_collect_terms_coeff(coeff) when is_integer(coeff), do: coeff
   defp quote_collect_terms_coeff(coeff), do: coeff
 
   defimpl Collectable do
@@ -986,19 +985,19 @@ defmodule OrTools.CpSat do
     def into(model) do
       fun = fn
         # Variable struct - store directly
-        acc, {:cont, %Variable{} = v} ->
-          %{acc | vars: acc.vars ++ [v]}
+        acc, {:cont, %Variable{} = variable} ->
+          Map.update!(acc, :vars, &(&1 ++ [variable]))
 
         # Constraint struct - store directly
-        acc, {:cont, %Constraint{} = c} ->
-          %{acc | constraints: acc.constraints ++ [c]}
+        acc, {:cont, %Constraint{} = constraint} ->
+          Map.update!(acc, :constraints, &(&1 ++ [constraint]))
 
         # List of Variable or Constraint structs
         acc, {:cont, items} when is_list(items) ->
           Enum.reduce(items, acc, fn
-            %Variable{} = v, m -> %{m | vars: m.vars ++ [v]}
-            %Constraint{} = c, m -> %{m | constraints: m.constraints ++ [c]}
-            tuple, m when is_tuple(tuple) -> add_constraint_tuple(m, tuple)
+            %Variable{} = variable, model -> Map.update!(model, :vars, &(&1 ++ [variable]))
+            %Constraint{} = constraint, model -> Map.update!(model, :constraints, &(&1 ++ [constraint]))
+            tuple, model when is_tuple(tuple) -> add_constraint_tuple(model, tuple)
           end)
 
         # Backward compat: raw tuples
