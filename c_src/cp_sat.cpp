@@ -82,6 +82,46 @@ static void apply_params(
   }
 }
 
+// Synchronization handle for solve_all with on_solution callback.
+// The observer waits for the Elixir handler to signal after each solution,
+// allowing the handler to request an early stop via {:halt, state}.
+struct SolveCtrl {
+  ErlNifMutex *mtx;
+  ErlNifCond *cond;
+  bool processed = false;
+  bool halt = false;
+
+  SolveCtrl() {
+    mtx = enif_mutex_create(const_cast<char *>("solve_ctrl_mtx"));
+    cond = enif_cond_create(const_cast<char *>("solve_ctrl_cond"));
+  }
+
+  void destructor(ErlNifEnv *) {
+    enif_mutex_destroy(mtx);
+    enif_cond_destroy(cond);
+  }
+};
+
+FINE_RESOURCE(SolveCtrl);
+
+// new_solve_ctrl() -> resource
+fine::ResourcePtr<SolveCtrl> new_solve_ctrl(ErlNifEnv *) {
+  return fine::make_resource<SolveCtrl>();
+}
+FINE_NIF(new_solve_ctrl, 0);
+
+// signal_solve(ctrl, :continue | :halt) -> :ok
+fine::Atom signal_solve(ErlNifEnv *, fine::ResourcePtr<SolveCtrl> ctrl,
+                        fine::Atom reply) {
+  enif_mutex_lock(ctrl->mtx);
+  ctrl->halt = (reply == "halt");
+  ctrl->processed = true;
+  enif_cond_signal(ctrl->cond);
+  enif_mutex_unlock(ctrl->mtx);
+  return fine::Atom("ok");
+}
+FINE_NIF(signal_solve, 0);
+
 static fine::Atom status_to_atom(or_sat::CpSolverStatus status) {
   switch (status) {
     case or_sat::CpSolverStatus::OPTIMAL:
@@ -349,13 +389,13 @@ static std::map<fine::Atom, int64_t> extract_stats(
   return stats;
 }
 
-// solve_all(vars, constraints, objective_or_nil, callback_pid_or_nil, params)
+// solve_all(vars, constraints, objective_or_nil, callback_pid_or_nil, ctrl_or_nil, params)
 //
 // Returns: {status, [{%{name => value}, objective}, ...], %{stat => value}}
 //
-// When callback_pid is provided (not nil), sends
-// {:solution, index, %{name => value}, objective} to that process for each
-// solution as it is found.
+// When callback_pid is provided (not nil), sends {:solution, index, values, objective}
+// to that process for each solution, then waits for a signal_solve/2 reply before
+// continuing. If the reply is :halt, search is stopped immediately.
 std::tuple<fine::Atom,
            std::vector<std::tuple<std::map<fine::Atom, int64_t>, double>>,
            std::map<fine::Atom, int64_t>>
@@ -365,6 +405,7 @@ solve_all(
     fine::Term constraints_term,
     fine::Term objective_term,
     fine::Term callback_pid_term,
+    fine::Term ctrl_term,
     fine::Term params_term) {
 
   auto m = build_model(env, vars, constraints_term, objective_term);
@@ -374,8 +415,10 @@ solve_all(
   // Check if a callback pid was provided
   bool has_callback = !enif_is_atom(env, callback_pid_term);
   ErlNifPid callback_pid;
+  fine::ResourcePtr<SolveCtrl> ctrl;
   if (has_callback) {
     callback_pid = fine::decode<ErlNifPid>(env, callback_pid_term);
+    ctrl = fine::decode<fine::ResourcePtr<SolveCtrl>>(env, ctrl_term);
   }
 
   // Configure parameters: apply user params first, then force enumerate_all_solutions
@@ -406,6 +449,19 @@ solve_all(
           auto msg = enif_make_tuple4(msg_env, tag, idx, vals, obj);
           enif_send(env, &callback_pid, msg_env, msg);
           enif_free_env(msg_env);
+
+          // Wait for handler to signal continue or halt
+          enif_mutex_lock(ctrl->mtx);
+          while (!ctrl->processed) {
+            enif_cond_wait(ctrl->cond, ctrl->mtx);
+          }
+          bool should_halt = ctrl->halt;
+          ctrl->processed = false;
+          enif_mutex_unlock(ctrl->mtx);
+
+          if (should_halt) {
+            or_sat::StopSearch(&model);
+          }
         } else {
           solutions.push_back({values, objective});
         }

@@ -10,6 +10,10 @@ defmodule OrTools.NIF do
 
   def solve(_vars, _constraints, _objective, _params), do: :erlang.nif_error(:nif_not_loaded)
 
-  def solve_all(_vars, _constraints, _objective, _callback_pid, _params),
+  def solve_all(_vars, _constraints, _objective, _callback_pid, _ctrl, _params),
     do: :erlang.nif_error(:nif_not_loaded)
+
+  def new_solve_ctrl(), do: :erlang.nif_error(:nif_not_loaded)
+
+  def signal_solve(_ctrl, _reply), do: :erlang.nif_error(:nif_not_loaded)
 end
