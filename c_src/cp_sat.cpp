@@ -43,11 +43,12 @@ struct VarValue {
   int64_t value;
 };
 
-// Holds builder, var_map, and var_order after building a model.
+// Holds builder, var_map, var_order, and interval_map after building a model.
 struct BuiltModel {
   or_sat::CpModelBuilder builder;
   std::map<std::string, or_sat::IntVar> var_map;
   std::vector<std::pair<std::string, or_sat::IntVar>> var_order;
+  std::map<std::string, or_sat::IntervalVar> interval_map;
 };
 
 // Apply a keyword list of solver parameters to a SatParameters object.
@@ -172,7 +173,14 @@ static BuiltModel build_model(
     if (arity == 2) {
       auto tag = fine::decode<fine::Atom>(env, elems[0]);
 
-      if (tag == "all_different") {
+      if (tag == "no_overlap") {
+        auto names = fine::decode<std::vector<fine::Atom>>(env, elems[1]);
+        std::vector<or_sat::IntervalVar> intervals;
+        for (const auto &name : names) {
+          intervals.push_back(m.interval_map.at(name.to_string()));
+        }
+        m.builder.AddNoOverlap(intervals);
+      } else if (tag == "all_different") {
         auto name_offsets =
             fine::decode<std::vector<std::tuple<fine::Atom, int64_t>>>(env, elems[1]);
         std::vector<or_sat::LinearExpr> exprs;
@@ -244,6 +252,32 @@ static BuiltModel build_model(
             m.var_map.at(target_name.to_string()),
             m.var_map.at(dividend_name.to_string()),
             m.var_map.at(divisor_name.to_string()));
+      }
+    } else if (arity == 5) {
+      auto tag = fine::decode<fine::Atom>(env, elems[0]);
+      if (tag == "interval") {
+        auto interval_name = fine::decode<fine::Atom>(env, elems[1]);
+        auto start_name    = fine::decode<fine::Atom>(env, elems[2]);
+        auto duration_name = fine::decode<fine::Atom>(env, elems[3]);
+        auto end_name      = fine::decode<fine::Atom>(env, elems[4]);
+
+        auto interval = m.builder.NewIntervalVar(
+            or_sat::LinearExpr(m.var_map.at(start_name.to_string())),
+            or_sat::LinearExpr(m.var_map.at(duration_name.to_string())),
+            or_sat::LinearExpr(m.var_map.at(end_name.to_string())));
+        m.interval_map[interval_name.to_string()] = interval;
+      } else if (tag == "interval_fixed") {
+        auto interval_name = fine::decode<fine::Atom>(env, elems[1]);
+        auto start_name    = fine::decode<fine::Atom>(env, elems[2]);
+        auto duration      = fine::decode<int64_t>(env, elems[3]);
+        auto end_name      = fine::decode<fine::Atom>(env, elems[4]);
+
+        auto dur_var = m.builder.NewIntVar(operations_research::Domain::FromValues({duration}));
+        auto interval = m.builder.NewIntervalVar(
+            or_sat::LinearExpr(m.var_map.at(start_name.to_string())),
+            or_sat::LinearExpr(dur_var),
+            or_sat::LinearExpr(m.var_map.at(end_name.to_string())));
+        m.interval_map[interval_name.to_string()] = interval;
       }
     } else if (arity == 3 && enif_is_atom(env, elems[0])) {
       auto tag = fine::decode<fine::Atom>(env, elems[0]);

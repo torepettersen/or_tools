@@ -47,13 +47,17 @@ defmodule OrTools.CpSat do
   end
 
   def bool_var(%__MODULE__{} = model, name) when is_atom(name) do
-    Map.update!(model, :vars, &(&1 ++ [bool_var(name)]))
+    var = bool_var(name)
+    {Map.update!(model, :vars, &(&1 ++ [var])), var}
   end
 
-  @doc "Adds boolean (0/1) variables for each name in the list."
+  @doc "Creates boolean (0/1) variables for each name in the list."
+  def bool_vars(names) when is_list(names), do: Enum.map(names, &bool_var/1)
+
+  @doc "Adds boolean (0/1) variables for each name in the list to a model."
   def bool_vars(%__MODULE__{} = model, names) when is_list(names) do
-    new_vars = Enum.map(names, &bool_var/1)
-    Map.update!(model, :vars, &(&1 ++ new_vars))
+    vars = bool_vars(names)
+    {Map.update!(model, :vars, &(&1 ++ vars)), vars}
   end
 
   @doc "Creates an integer variable with the given name and range."
@@ -68,17 +72,98 @@ defmodule OrTools.CpSat do
 
   @doc "Adds an integer variable to a model."
   def int_var(%__MODULE__{} = model, name, %Range{} = range) when is_atom(name) do
-    Map.update!(model, :vars, &(&1 ++ [int_var(name, range)]))
+    var = int_var(name, range)
+    {Map.update!(model, :vars, &(&1 ++ [var])), var}
   end
 
   def int_var(%__MODULE__{} = model, name, lower_bound, upper_bound) when is_atom(name) do
-    Map.update!(model, :vars, &(&1 ++ [int_var(name, lower_bound, upper_bound)]))
+    var = int_var(name, lower_bound, upper_bound)
+    {Map.update!(model, :vars, &(&1 ++ [var])), var}
   end
 
-  @doc "Adds integer variables with the given range for each name in the list."
+  @doc "Creates integer variables with the given range for each name in the list."
+  def int_vars(names, %Range{} = range) when is_list(names), do: Enum.map(names, &int_var(&1, range))
+
+  @doc "Adds integer variables with the given range for each name in the list to a model."
   def int_vars(%__MODULE__{} = model, names, %Range{} = range) when is_list(names) do
-    new_vars = Enum.map(names, &int_var(&1, range))
-    Map.update!(model, :vars, &(&1 ++ new_vars))
+    vars = int_vars(names, range)
+    {Map.update!(model, :vars, &(&1 ++ vars)), vars}
+  end
+
+  @doc "Creates an interval variable defined by start, duration, and end variables."
+  def interval_var(name, start_name, duration_name, end_name)
+      when is_atom(name) and is_atom(start_name) and is_atom(duration_name) and is_atom(end_name) do
+    %Constraint{type: :interval, data: {name, start_name, duration_name, end_name}}
+  end
+
+  def interval_var(%Variable{name: start_name}, name, duration, %Variable{name: end_name})
+      when is_atom(name) and is_integer(duration) do
+    %Constraint{type: :interval_fixed, data: {name, start_name, duration, end_name}}
+  end
+
+  @doc "Adds an interval variable to a model."
+  def interval_var(%__MODULE__{} = model, name, start_name, duration_name, end_name)
+      when is_atom(start_name) do
+    Map.update!(model, :constraints, &(&1 ++ [interval_var(name, start_name, duration_name, end_name)]))
+  end
+
+  def interval_var(%__MODULE__{} = model, name, %Variable{} = start_var, duration, %Variable{} = end_var)
+      when is_integer(duration) do
+    interval = interval_var(start_var, name, duration, end_var)
+    {Map.update!(model, :constraints, &(&1 ++ [interval])), interval}
+  end
+
+  @doc "Adds a variable or constraint (or list thereof) to a model without returning the item."
+  def add(%__MODULE__{} = model, %Variable{} = var) do
+    Map.update!(model, :vars, &(&1 ++ [var]))
+  end
+
+  def add(%__MODULE__{} = model, %Constraint{} = constraint) do
+    Map.update!(model, :constraints, &(&1 ++ [constraint]))
+  end
+
+  def add(%__MODULE__{} = model, items) when is_list(items) do
+    Enum.reduce(items, model, &add(&2, &1))
+  end
+
+  @doc "Reads the solved value of a variable from a result by Variable struct."
+  def value(result, %Variable{name: name}), do: result.values[name]
+
+  @doc "Creates a no-overlap constraint: no two interval variables overlap in time."
+  def no_overlap(intervals) when is_list(intervals) do
+    names =
+      Enum.map(intervals, fn
+        name when is_atom(name) -> name
+        %Constraint{data: {name, _, _, _}} -> name
+      end)
+
+    %Constraint{type: :no_overlap, data: names}
+  end
+
+  @doc "Adds a no-overlap constraint to a model."
+  def no_overlap(%__MODULE__{} = model, intervals) when is_list(intervals) do
+    Map.update!(model, :constraints, &(&1 ++ [no_overlap(intervals)]))
+  end
+
+  @doc "Creates a max-equality constraint: target = max(var_names)."
+  def max_eq(target, var_names) when is_atom(target) and is_list(var_names) do
+    %Constraint{type: :max_eq, data: {target, resolve_var_names(var_names)}}
+  end
+
+  def max_eq(%Variable{name: target_name}, var_names) when is_list(var_names) do
+    max_eq(target_name, var_names)
+  end
+
+  @doc "Adds a max-equality constraint to a model."
+  def max_eq(%__MODULE__{} = model, target, var_names) do
+    Map.update!(model, :constraints, &(&1 ++ [max_eq(target, var_names)]))
+  end
+
+  defp resolve_var_names(items) do
+    Enum.map(items, fn
+      %Variable{name: name} -> name
+      name when is_atom(name) -> name
+    end)
   end
 
   @doc """
@@ -286,7 +371,7 @@ defmodule OrTools.CpSat do
             max(abs(lower_bound * c), abs(upper_bound * c))
           end) + abs(inner.const)
 
-        model = int_var(model, abs_name, 0, max_bound)
+        model = add(model, int_var(abs_name, 0, max_bound))
 
         model =
           Map.update!(
@@ -319,7 +404,7 @@ defmodule OrTools.CpSat do
               aux_lower_bound = all_extremes |> Enum.map(&elem(&1, 0)) |> Enum.min()
               aux_upper_bound = all_extremes |> Enum.map(&elem(&1, 1)) |> Enum.max()
 
-              model = int_var(model, aux_name, aux_lower_bound, aux_upper_bound)
+              model = add(model, int_var(aux_name, aux_lower_bound, aux_upper_bound))
               var_bounds = Map.put(var_bounds, aux_name, {aux_lower_bound, aux_upper_bound})
 
               eq_terms = base.terms ++ [{aux_name, -1}]
@@ -354,7 +439,7 @@ defmodule OrTools.CpSat do
             pow_lower_bound = Enum.min(products)
             pow_upper_bound = Enum.max(products)
 
-            model = int_var(model, pow_name, pow_lower_bound, pow_upper_bound)
+            model = add(model, int_var(pow_name, pow_lower_bound, pow_upper_bound))
 
             variable_bounds =
               Map.put(variable_bounds, pow_name, {pow_lower_bound, pow_upper_bound})
@@ -387,7 +472,7 @@ defmodule OrTools.CpSat do
         products = for l <- [left_lower, left_upper], r <- [right_lower, right_upper], do: l * r
 
         mul_name = :"__mul_#{:erlang.unique_integer([:positive])}"
-        model = int_var(model, mul_name, Enum.min(products), Enum.max(products))
+        model = add(model, int_var(mul_name, Enum.min(products), Enum.max(products)))
 
         model =
           Map.update!(
@@ -404,11 +489,13 @@ defmodule OrTools.CpSat do
         min_name = :"__min_#{:erlang.unique_integer([:positive])}"
 
         model =
-          int_var(
+          add(
             model,
-            min_name,
-            Enum.min_by(bounds, &elem(&1, 0)) |> elem(0),
-            Enum.min_by(bounds, &elem(&1, 1)) |> elem(1)
+            int_var(
+              min_name,
+              Enum.min_by(bounds, &elem(&1, 0)) |> elem(0),
+              Enum.min_by(bounds, &elem(&1, 1)) |> elem(1)
+            )
           )
 
         model =
@@ -426,11 +513,13 @@ defmodule OrTools.CpSat do
         max_name = :"__max_#{:erlang.unique_integer([:positive])}"
 
         model =
-          int_var(
+          add(
             model,
-            max_name,
-            Enum.max_by(bounds, &elem(&1, 0)) |> elem(0),
-            Enum.max_by(bounds, &elem(&1, 1)) |> elem(1)
+            int_var(
+              max_name,
+              Enum.max_by(bounds, &elem(&1, 0)) |> elem(0),
+              Enum.max_by(bounds, &elem(&1, 1)) |> elem(1)
+            )
           )
 
         model =
@@ -456,7 +545,7 @@ defmodule OrTools.CpSat do
               do: Kernel.div(n, d)
 
         div_name = :"__div_#{:erlang.unique_integer([:positive])}"
-        model = int_var(model, div_name, Enum.min(quotients), Enum.max(quotients))
+        model = add(model, int_var(div_name, Enum.min(quotients), Enum.max(quotients)))
 
         model =
           Map.update!(
@@ -743,6 +832,24 @@ defmodule OrTools.CpSat do
          declared
        ) do
     check_var_names([target, dividend, divisor], declared)
+  end
+
+  defp validate_constraint(
+         %Constraint{type: :interval, data: {_name, start_name, duration_name, end_name}},
+         declared
+       ) do
+    check_var_names([start_name, duration_name, end_name], declared)
+  end
+
+  defp validate_constraint(
+         %Constraint{type: :interval_fixed, data: {_name, start_name, _duration, end_name}},
+         declared
+       ) do
+    check_var_names([start_name, end_name], declared)
+  end
+
+  defp validate_constraint(%Constraint{type: :no_overlap, data: _interval_names}, _declared) do
+    :ok
   end
 
   defp validate_constraint(%Constraint{type: :linear, data: {terms, _op, _rhs}}, declared) do

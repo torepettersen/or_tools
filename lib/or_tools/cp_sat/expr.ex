@@ -32,6 +32,7 @@ defmodule OrTools.CpSat.Expr do
   @doc false
   def new, do: %__MODULE__{}
   def new(%__MODULE__{} = expr), do: expr
+  def new(%OrTools.CpSat.Variable{name: name}), do: %__MODULE__{terms: [{name, 1}]}
   def new(name) when is_atom(name), do: %__MODULE__{terms: [{name, 1}]}
   def new(value) when is_integer(value), do: %__MODULE__{const: value}
 
