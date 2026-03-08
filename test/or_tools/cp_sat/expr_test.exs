@@ -57,14 +57,14 @@ defmodule OrTools.CpSat.ExprTest do
     end
 
     test "scale applies to special terms" do
-      expr = %Expr{special: [{:abs, Expr.new(:x), 1}, {:pow, Expr.new(:y), 2, 3}]}
+      expr = %Expr{special: [{:abs, Expr.new(:x), 1}, {:abs, Expr.new(:y), 3}]}
       result = Expr.scale(expr, 5)
-      assert [{:abs, _, 5}, {:pow, _, 2, 15}] = result.special
+      assert [{:abs, _, 5}, {:abs, _, 15}] = result.special
     end
 
     test "add combines special terms" do
       a = %Expr{special: [{:abs, Expr.new(:x), 1}]}
-      b = %Expr{special: [{:pow, Expr.new(:y), 2, 1}]}
+      b = %Expr{special: [{:abs, Expr.new(:y), 1}]}
       result = Expr.add(a, b)
       assert length(result.special) == 2
     end

@@ -3,13 +3,13 @@ defmodule OrTools.CpSat.Expr do
   An expression in a CP-SAT model.
 
   Represents a linear combination of variables, a constant offset, and
-  special non-linear terms (abs, pow, mul, div, min, max) that will be
+  special non-linear terms (abs, mul, div, min, max) that will be
   linearized when building constraints or objectives.
 
   Created via `CpSat.expr/1`. Composable at runtime:
 
       score = CpSat.expr(2 * :x + 3 * :y)
-      penalty = CpSat.expr(-pow(:z, 2))
+      penalty = CpSat.expr(-abs(:z))
       total = CpSat.expr(score + penalty)
   """
 
@@ -23,7 +23,6 @@ defmodule OrTools.CpSat.Expr do
 
   @type special_term ::
           {:abs, t(), integer()}
-          | {:pow, t(), pos_integer(), integer()}
           | {:mul, t(), t(), integer()}
           | {:div, t(), t(), integer()}
           | {:min, [atom()], integer()}
@@ -77,7 +76,6 @@ defmodule OrTools.CpSat.Expr do
   end
 
   defp scale_special({:abs, inner, coeff}, factor), do: {:abs, inner, coeff * factor}
-  defp scale_special({:pow, base, exp, coeff}, factor), do: {:pow, base, exp, coeff * factor}
   defp scale_special({:mul, left, right, coeff}, factor), do: {:mul, left, right, coeff * factor}
 
   defp scale_special({:div, dividend, divisor, coeff}, factor),
@@ -105,7 +103,6 @@ defmodule OrTools.CpSat.Expr do
     end
 
     defp format_special({:abs, _inner, coeff}), do: {coeff, "abs(...)"}
-    defp format_special({:pow, _inner, exp, coeff}), do: {coeff, "pow(..., #{exp})"}
     defp format_special({:mul, _inner_l, _inner_r, coeff}), do: {coeff, "mul(...)"}
     defp format_special({:div, _inner_d, _inner_v, coeff}), do: {coeff, "div(...)"}
     defp format_special({:min, vars, coeff}), do: {coeff, "min(#{inspect_vars(vars)})"}

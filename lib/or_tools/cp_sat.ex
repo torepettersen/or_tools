@@ -302,9 +302,6 @@ defmodule OrTools.CpSat do
 
       iex> CpSat.expr(2 * :x + 3 * :y)
       #Expr<2*x + 3*y>
-
-      iex> CpSat.expr(-pow(:x + :y - 10, 2))
-      #Expr<-pow(..., 2)>
   """
   defmacro expr(expression) do
     quote_collect_terms(expression)
@@ -375,76 +372,6 @@ defmodule OrTools.CpSat do
         model = add(model, %Constraint{type: :abs_eq, data: {abs_name, inner.terms, inner.const}})
 
         {model, [{abs_name, coeff} | acc]}
-
-      {:pow, %Expr{} = base, exponent, coeff}, {model, acc} ->
-        # If the base is a single variable with coeff 1 and no constant, reuse it directly.
-        {model, var_bounds, source_var} =
-          case {base.terms, base.const} do
-            {[{base_var, 1}], 0} ->
-              {model, var_bounds, base_var}
-
-            _ ->
-              aux_name = :"__pow_base_#{:erlang.unique_integer([:positive])}"
-
-              all_extremes =
-                Enum.reduce(base.terms, [{base.const, base.const}], fn {name, c}, ranges ->
-                  {lower_bound, upper_bound} = Map.get(var_bounds, name, {0, 0})
-
-                  for {lo, hi} <- ranges, v <- [lower_bound * c, upper_bound * c] do
-                    {min(lo + v, lo), max(hi + v, hi)}
-                  end
-                end)
-
-              aux_lower_bound = all_extremes |> Enum.map(&elem(&1, 0)) |> Enum.min()
-              aux_upper_bound = all_extremes |> Enum.map(&elem(&1, 1)) |> Enum.max()
-
-              model = add(model, int_var(aux_name, aux_lower_bound, aux_upper_bound))
-              var_bounds = Map.put(var_bounds, aux_name, {aux_lower_bound, aux_upper_bound})
-
-              eq_terms = base.terms ++ [{aux_name, -1}]
-              model = add(model, %Constraint{type: :linear, data: {eq_terms, :==, -base.const}})
-
-              {model, var_bounds, aux_name}
-          end
-
-        # Chain: aux1 = source * source, aux2 = aux1 * source, ...
-        {model, _var_bounds, result_var} =
-          Enum.reduce(2..exponent, {model, var_bounds, source_var}, fn i,
-                                                                       {model, variable_bounds,
-                                                                        prev_var} ->
-            pow_name = :"__pow_#{:erlang.unique_integer([:positive])}"
-
-            {prev_lower, prev_upper} = Map.get(variable_bounds, prev_var, {0, 0})
-            {src_lower, src_upper} = Map.get(variable_bounds, source_var, {0, 0})
-
-            products = [
-              prev_lower * src_lower,
-              prev_lower * src_upper,
-              prev_upper * src_lower,
-              prev_upper * src_upper
-            ]
-
-            pow_lower_bound = Enum.min(products)
-            pow_upper_bound = Enum.max(products)
-
-            model = add(model, int_var(pow_name, pow_lower_bound, pow_upper_bound))
-
-            variable_bounds =
-              Map.put(variable_bounds, pow_name, {pow_lower_bound, pow_upper_bound})
-
-            factors =
-              if i > 2 do
-                [prev_var, source_var]
-              else
-                [source_var, source_var]
-              end
-
-            model = add(model, %Constraint{type: :mul_eq, data: {pow_name, factors}})
-
-            {model, variable_bounds, pow_name}
-          end)
-
-        {model, [{result_var, coeff} | acc]}
 
       {:mul, %Expr{} = left, %Expr{} = right, coeff}, {model, acc} ->
         [{left_var, 1}] = left.terms
@@ -723,7 +650,7 @@ defmodule OrTools.CpSat do
   defp internal_var?(name) do
     name_string = Atom.to_string(name)
 
-    String.starts_with?(name_string, "__abs_") or String.starts_with?(name_string, "__pow_") or
+    String.starts_with?(name_string, "__abs_") or
       String.starts_with?(name_string, "__mul_") or String.starts_with?(name_string, "__div_") or
       String.starts_with?(name_string, "__min_") or String.starts_with?(name_string, "__max_")
   end
@@ -853,7 +780,7 @@ defmodule OrTools.CpSat do
 
     if combined.special != [] do
       raise ArgumentError,
-            "constraints cannot contain nonlinear terms (abs, pow, mul, div, min, max)"
+            "constraints cannot contain nonlinear terms (abs, mul, div, min, max)"
     end
 
     final_vars = merge_terms(combined.terms)
@@ -918,12 +845,6 @@ defmodule OrTools.CpSat do
           }
   end
 
-  # pow(expr, exponent)
-  defp quote_collect_terms({:pow, _, [base, exp]}) when is_integer(exp) and exp >= 2 do
-    base_ast = quote_collect_terms(base)
-    quote do: %OrTools.CpSat.Expr{special: [{:pow, unquote(base_ast), unquote(exp), 1}]}
-  end
-
   # sum(list) — reduces a runtime list into a single Expr
   defp quote_collect_terms({:sum, _, [arg]}) do
     quote do: OrTools.CpSat.Expr.sum(unquote(arg))
@@ -984,27 +905,6 @@ defmodule OrTools.CpSat do
 
     quote do: %OrTools.CpSat.Expr{
             special: [{:div, unquote(dividend_ast), unquote(divisor_ast), unquote(coeff_ast)}]
-          }
-  end
-
-  # coeff * pow(base, exp)
-  defp quote_collect_terms({:*, _, [coeff, {:pow, _, [base, exp]}]})
-       when is_integer(exp) and exp >= 2 do
-    base_ast = quote_collect_terms(base)
-    coeff_ast = quote_collect_terms_coeff(coeff)
-
-    quote do: %OrTools.CpSat.Expr{
-            special: [{:pow, unquote(base_ast), unquote(exp), unquote(coeff_ast)}]
-          }
-  end
-
-  defp quote_collect_terms({:*, _, [{:pow, _, [base, exp]}, coeff]})
-       when is_integer(exp) and exp >= 2 do
-    base_ast = quote_collect_terms(base)
-    coeff_ast = quote_collect_terms_coeff(coeff)
-
-    quote do: %OrTools.CpSat.Expr{
-            special: [{:pow, unquote(base_ast), unquote(exp), unquote(coeff_ast)}]
           }
   end
 
