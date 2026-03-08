@@ -48,7 +48,7 @@ defmodule OrTools.CpSat do
 
   def bool_var(%__MODULE__{} = model, name) when is_atom(name) do
     var = bool_var(name)
-    {Map.update!(model, :vars, &(&1 ++ [var])), var}
+    {add(model, var), var}
   end
 
   @doc "Creates boolean (0/1) variables for each name in the list."
@@ -57,7 +57,7 @@ defmodule OrTools.CpSat do
   @doc "Adds boolean (0/1) variables for each name in the list to a model."
   def bool_vars(%__MODULE__{} = model, names) when is_list(names) do
     vars = bool_vars(names)
-    {Map.update!(model, :vars, &(&1 ++ vars)), vars}
+    {add(model, vars), vars}
   end
 
   @doc "Creates an integer variable with the given name and range."
@@ -73,12 +73,12 @@ defmodule OrTools.CpSat do
   @doc "Adds an integer variable to a model."
   def int_var(%__MODULE__{} = model, name, %Range{} = range) when is_atom(name) do
     var = int_var(name, range)
-    {Map.update!(model, :vars, &(&1 ++ [var])), var}
+    {add(model, var), var}
   end
 
   def int_var(%__MODULE__{} = model, name, lower_bound, upper_bound) when is_atom(name) do
     var = int_var(name, lower_bound, upper_bound)
-    {Map.update!(model, :vars, &(&1 ++ [var])), var}
+    {add(model, var), var}
   end
 
   @doc "Creates integer variables with the given range for each name in the list."
@@ -87,7 +87,7 @@ defmodule OrTools.CpSat do
   @doc "Adds integer variables with the given range for each name in the list to a model."
   def int_vars(%__MODULE__{} = model, names, %Range{} = range) when is_list(names) do
     vars = int_vars(names, range)
-    {Map.update!(model, :vars, &(&1 ++ vars)), vars}
+    {add(model, vars), vars}
   end
 
   @doc "Creates an interval variable defined by start, duration, and end variables."
@@ -104,13 +104,13 @@ defmodule OrTools.CpSat do
   @doc "Adds an interval variable to a model."
   def interval_var(%__MODULE__{} = model, name, start_name, duration_name, end_name)
       when is_atom(start_name) do
-    Map.update!(model, :constraints, &(&1 ++ [interval_var(name, start_name, duration_name, end_name)]))
+    add(model, interval_var(name, start_name, duration_name, end_name))
   end
 
   def interval_var(%__MODULE__{} = model, name, %Variable{} = start_var, duration, %Variable{} = end_var)
       when is_integer(duration) do
     interval = interval_var(start_var, name, duration, end_var)
-    {Map.update!(model, :constraints, &(&1 ++ [interval])), interval}
+    {add(model, interval), interval}
   end
 
   @doc "Adds a variable or constraint (or list thereof) to a model without returning the item."
@@ -142,7 +142,7 @@ defmodule OrTools.CpSat do
 
   @doc "Adds a no-overlap constraint to a model."
   def no_overlap(%__MODULE__{} = model, intervals) when is_list(intervals) do
-    Map.update!(model, :constraints, &(&1 ++ [no_overlap(intervals)]))
+    add(model, no_overlap(intervals))
   end
 
   @doc "Creates a max-equality constraint: target = max(var_names)."
@@ -156,7 +156,7 @@ defmodule OrTools.CpSat do
 
   @doc "Adds a max-equality constraint to a model."
   def max_eq(%__MODULE__{} = model, target, var_names) do
-    Map.update!(model, :constraints, &(&1 ++ [max_eq(target, var_names)]))
+    add(model, max_eq(target, var_names))
   end
 
   defp resolve_var_names(items) do
@@ -231,7 +231,7 @@ defmodule OrTools.CpSat do
 
   @doc "Adds an all-different constraint to a model."
   def all_different(%__MODULE__{} = model, items) when is_list(items) do
-    Map.update!(model, :constraints, &(&1 ++ [all_different(items)]))
+    add(model, all_different(items))
   end
 
   defp expand_all_different_items(items) do
@@ -247,7 +247,7 @@ defmodule OrTools.CpSat do
   end
 
   def exactly_one(%__MODULE__{} = model, var_names) when is_list(var_names) do
-    Map.update!(model, :constraints, &(&1 ++ [exactly_one(var_names)]))
+    add(model, exactly_one(var_names))
   end
 
   @doc "Constrains at most one of the given boolean variables to be true."
@@ -256,7 +256,7 @@ defmodule OrTools.CpSat do
   end
 
   def at_most_one(%__MODULE__{} = model, var_names) when is_list(var_names) do
-    Map.update!(model, :constraints, &(&1 ++ [at_most_one(var_names)]))
+    add(model, at_most_one(var_names))
   end
 
   @doc "Constrains at least one of the given boolean variables to be true."
@@ -265,7 +265,7 @@ defmodule OrTools.CpSat do
   end
 
   def at_least_one(%__MODULE__{} = model, var_names) when is_list(var_names) do
-    Map.update!(model, :constraints, &(&1 ++ [at_least_one(var_names)]))
+    add(model, at_least_one(var_names))
   end
 
   @doc "Constrains the boolean AND of the given variables to be true."
@@ -274,7 +274,7 @@ defmodule OrTools.CpSat do
   end
 
   def bool_and(%__MODULE__{} = model, var_names) when is_list(var_names) do
-    Map.update!(model, :constraints, &(&1 ++ [bool_and(var_names)]))
+    add(model, bool_and(var_names))
   end
 
   @doc "Constrains the boolean OR of the given variables to be true."
@@ -283,7 +283,7 @@ defmodule OrTools.CpSat do
   end
 
   def bool_or(%__MODULE__{} = model, var_names) when is_list(var_names) do
-    Map.update!(model, :constraints, &(&1 ++ [bool_or(var_names)]))
+    add(model, bool_or(var_names))
   end
 
   @doc "Constrains the boolean XOR of the given variables to be true."
@@ -292,7 +292,7 @@ defmodule OrTools.CpSat do
   end
 
   def bool_xor(%__MODULE__{} = model, var_names) when is_list(var_names) do
-    Map.update!(model, :constraints, &(&1 ++ [bool_xor(var_names)]))
+    add(model, bool_xor(var_names))
   end
 
   @doc """
@@ -372,13 +372,7 @@ defmodule OrTools.CpSat do
           end) + abs(inner.const)
 
         model = add(model, int_var(abs_name, 0, max_bound))
-
-        model =
-          Map.update!(
-            model,
-            :constraints,
-            &(&1 ++ [%Constraint{type: :abs_eq, data: {abs_name, inner.terms, inner.const}}])
-          )
+        model = add(model, %Constraint{type: :abs_eq, data: {abs_name, inner.terms, inner.const}})
 
         {model, [{abs_name, coeff} | acc]}
 
@@ -408,13 +402,7 @@ defmodule OrTools.CpSat do
               var_bounds = Map.put(var_bounds, aux_name, {aux_lower_bound, aux_upper_bound})
 
               eq_terms = base.terms ++ [{aux_name, -1}]
-
-              model =
-                Map.update!(
-                  model,
-                  :constraints,
-                  &(&1 ++ [%Constraint{type: :linear, data: {eq_terms, :==, -base.const}}])
-                )
+              model = add(model, %Constraint{type: :linear, data: {eq_terms, :==, -base.const}})
 
               {model, var_bounds, aux_name}
           end
@@ -451,12 +439,7 @@ defmodule OrTools.CpSat do
                 [source_var, source_var]
               end
 
-            model =
-              Map.update!(
-                model,
-                :constraints,
-                &(&1 ++ [%Constraint{type: :mul_eq, data: {pow_name, factors}}])
-              )
+            model = add(model, %Constraint{type: :mul_eq, data: {pow_name, factors}})
 
             {model, variable_bounds, pow_name}
           end)
@@ -473,13 +456,7 @@ defmodule OrTools.CpSat do
 
         mul_name = :"__mul_#{:erlang.unique_integer([:positive])}"
         model = add(model, int_var(mul_name, Enum.min(products), Enum.max(products)))
-
-        model =
-          Map.update!(
-            model,
-            :constraints,
-            &(&1 ++ [%Constraint{type: :mul_eq, data: {mul_name, [left_var, right_var]}}])
-          )
+        model = add(model, %Constraint{type: :mul_eq, data: {mul_name, [left_var, right_var]}})
 
         {model, [{mul_name, coeff} | acc]}
 
@@ -498,12 +475,7 @@ defmodule OrTools.CpSat do
             )
           )
 
-        model =
-          Map.update!(
-            model,
-            :constraints,
-            &(&1 ++ [%Constraint{type: :min_eq, data: {min_name, var_names}}])
-          )
+        model = add(model, %Constraint{type: :min_eq, data: {min_name, var_names}})
 
         {model, [{min_name, coeff} | acc]}
 
@@ -522,12 +494,7 @@ defmodule OrTools.CpSat do
             )
           )
 
-        model =
-          Map.update!(
-            model,
-            :constraints,
-            &(&1 ++ [%Constraint{type: :max_eq, data: {max_name, var_names}}])
-          )
+        model = add(model, %Constraint{type: :max_eq, data: {max_name, var_names}})
 
         {model, [{max_name, coeff} | acc]}
 
@@ -546,13 +513,7 @@ defmodule OrTools.CpSat do
 
         div_name = :"__div_#{:erlang.unique_integer([:positive])}"
         model = add(model, int_var(div_name, Enum.min(quotients), Enum.max(quotients)))
-
-        model =
-          Map.update!(
-            model,
-            :constraints,
-            &(&1 ++ [%Constraint{type: :div_eq, data: {div_name, dividend_var, divisor_var}}])
-          )
+        model = add(model, %Constraint{type: :div_eq, data: {div_name, dividend_var, divisor_var}})
 
         {model, [{div_name, coeff} | acc]}
     end)
@@ -1159,34 +1120,11 @@ defmodule OrTools.CpSat do
   defp quote_collect_terms_coeff(coeff), do: coeff
 
   defimpl Collectable do
-    alias OrTools.CpSat.Constraint
-    alias OrTools.CpSat.Variable
-
     def into(model) do
       fun = fn
-        # Variable struct - store directly
-        acc, {:cont, %Variable{} = variable} ->
-          Map.update!(acc, :vars, &(&1 ++ [variable]))
-
-        # Constraint struct - store directly
-        acc, {:cont, %Constraint{} = constraint} ->
-          Map.update!(acc, :constraints, &(&1 ++ [constraint]))
-
-        # List of Variable or Constraint structs
-        acc, {:cont, items} when is_list(items) ->
-          Enum.reduce(items, acc, fn
-            %Variable{} = variable, model ->
-              Map.update!(model, :vars, &(&1 ++ [variable]))
-
-            %Constraint{} = constraint, model ->
-              Map.update!(model, :constraints, &(&1 ++ [constraint]))
-          end)
-
-        acc, :done ->
-          acc
-
-        _acc, :halt ->
-          :ok
+        acc, {:cont, item} -> OrTools.CpSat.add(acc, item)
+        acc, :done -> acc
+        _acc, :halt -> :ok
       end
 
       {model, fun}
