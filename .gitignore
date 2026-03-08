@@ -32,3 +32,4 @@ or_tools-*.tar
 
 # Env
 .env
+.direnv
