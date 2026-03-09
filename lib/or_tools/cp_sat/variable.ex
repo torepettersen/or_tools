@@ -34,6 +34,42 @@ defmodule OrTools.CpSat.Variable do
       }),
       do: {name, lower_bound, upper_bound}
 
+  @doc "Builds a map of variable name => {lower_bound, upper_bound} for all vars."
+  def bounds_map(vars) when is_list(vars) do
+    Map.new(vars, fn %__MODULE__{name: name, lower_bound: lower_bound, upper_bound: upper_bound} ->
+      {name, {lower_bound || 0, upper_bound || 1}}
+    end)
+  end
+
+  @doc "Returns true if the variable name was generated as an auxiliary (internal) variable."
+  def internal?(name) when is_atom(name) do
+    s = Atom.to_string(name)
+
+    String.starts_with?(s, "__abs_") or
+      String.starts_with?(s, "__mul_") or
+      String.starts_with?(s, "__div_") or
+      String.starts_with?(s, "__min_") or
+      String.starts_with?(s, "__max_")
+  end
+
+  @doc "Returns a MapSet of internal variable names from a list of Variable structs."
+  def internal_names(vars) when is_list(vars) do
+    vars
+    |> Enum.map(fn %__MODULE__{name: name} -> name end)
+    |> Enum.filter(&internal?/1)
+    |> MapSet.new()
+  end
+
+  @doc "Removes internal auxiliary variables from a values map."
+  def filter_internal(values) when is_map(values) do
+    Map.reject(values, fn {name, _} -> internal?(name) end)
+  end
+
+  @doc "Removes the given set of internal variable names from a values map."
+  def reject_internal(values, internal_names) when is_map(values) do
+    Map.reject(values, fn {name, _} -> MapSet.member?(internal_names, name) end)
+  end
+
   defimpl Inspect do
     import Inspect.Algebra
 

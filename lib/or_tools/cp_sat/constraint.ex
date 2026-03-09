@@ -21,6 +21,11 @@ defmodule OrTools.CpSat.Constraint do
           | :interval
           | :interval_fixed
           | :no_overlap
+          | :abs_eq
+          | :mul_eq
+          | :min_eq
+          | :max_eq
+          | :div_eq
 
   @doc false
   def linear(terms, op, rhs), do: %__MODULE__{type: :linear, data: {terms, op, rhs}}
@@ -44,6 +49,73 @@ defmodule OrTools.CpSat.Constraint do
   def min_eq(target, var_names), do: %__MODULE__{type: :min_eq, data: {target, var_names}}
   def div_eq(target, dividend, divisor),
     do: %__MODULE__{type: :div_eq, data: {target, dividend, divisor}}
+
+  # --- Validation ---
+
+  @doc "Validates that all variable names referenced by this constraint are declared."
+  def validate(%__MODULE__{type: :all_different, data: name_offsets}, declared) do
+    Enum.map(name_offsets, &elem(&1, 0)) |> check_var_names(declared)
+  end
+
+  def validate(%__MODULE__{type: type, data: var_names}, declared)
+      when type in [:exactly_one, :at_most_one, :at_least_one, :bool_and, :bool_or, :bool_xor] do
+    check_var_names(var_names, declared)
+  end
+
+  def validate(%__MODULE__{type: :abs_eq, data: {target, terms, _const}}, declared) do
+    with :ok <- check_var_names([target], declared),
+         :ok <- check_terms(terms, declared),
+         do: :ok
+  end
+
+  def validate(%__MODULE__{type: type, data: {target, var_names}}, declared)
+      when type in [:mul_eq, :min_eq, :max_eq] do
+    check_var_names([target | var_names], declared)
+  end
+
+  def validate(%__MODULE__{type: :div_eq, data: {target, dividend, divisor}}, declared) do
+    check_var_names([target, dividend, divisor], declared)
+  end
+
+  def validate(
+        %__MODULE__{type: :interval, data: {_name, start_name, duration_name, end_name}},
+        declared
+      ) do
+    check_var_names([start_name, duration_name, end_name], declared)
+  end
+
+  def validate(
+        %__MODULE__{type: :interval_fixed, data: {_name, start_name, _duration, end_name}},
+        declared
+      ) do
+    check_var_names([start_name, end_name], declared)
+  end
+
+  def validate(%__MODULE__{type: :no_overlap}, _declared), do: :ok
+
+  def validate(%__MODULE__{type: :linear, data: {terms, _op, _rhs}}, declared) do
+    check_terms(terms, declared)
+  end
+
+  defp check_terms(terms, declared) do
+    Enum.map(terms, &elem(&1, 0)) |> check_var_names(declared)
+  end
+
+  defp check_var_names(names, declared) do
+    case Enum.reject(names, &MapSet.member?(declared, &1)) do
+      [] ->
+        :ok
+
+      unknown ->
+        declared_list = declared |> MapSet.to_list() |> Enum.sort()
+
+        {:error,
+         "unknown variable(s) #{inspect(unknown)} in model. " <>
+           "Declared variables: #{inspect(declared_list)}"}
+    end
+  end
+
+  # --- Serialization ---
 
   @doc false
   def to_tuple(%__MODULE__{type: :linear, data: {terms, op, rhs}}), do: {terms, op, rhs}
