@@ -43,9 +43,7 @@ defmodule OrTools.CpSat do
   def new, do: %__MODULE__{}
 
   @doc "Creates a boolean (0/1) variable with the given name."
-  def bool_var(name) when is_atom(name) do
-    %Variable{type: :bool, name: name}
-  end
+  def bool_var(name) when is_atom(name), do: Variable.bool(name)
 
   def bool_var(%__MODULE__{} = model, name) when is_atom(name) do
     var = bool_var(name)
@@ -62,14 +60,11 @@ defmodule OrTools.CpSat do
   end
 
   @doc "Creates an integer variable with the given name and range."
-  def int_var(name, %Range{first: lower_bound, last: upper_bound}) when is_atom(name) do
-    int_var(name, lower_bound, upper_bound)
-  end
+  def int_var(name, %Range{} = range) when is_atom(name), do: Variable.int(name, range)
 
   def int_var(name, lower_bound, upper_bound)
-      when is_atom(name) and is_integer(lower_bound) and is_integer(upper_bound) do
-    %Variable{type: :int, name: name, lower_bound: lower_bound, upper_bound: upper_bound}
-  end
+      when is_atom(name) and is_integer(lower_bound) and is_integer(upper_bound),
+      do: Variable.int(name, lower_bound, upper_bound)
 
   @doc "Adds an integer variable to a model."
   def int_var(%__MODULE__{} = model, name, %Range{} = range) when is_atom(name) do
@@ -93,14 +88,12 @@ defmodule OrTools.CpSat do
 
   @doc "Creates an interval variable defined by start, duration, and end variables."
   def interval_var(name, start_name, duration_name, end_name)
-      when is_atom(name) and is_atom(start_name) and is_atom(duration_name) and is_atom(end_name) do
-    %Constraint{type: :interval, data: {name, start_name, duration_name, end_name}}
-  end
+      when is_atom(name) and is_atom(start_name) and is_atom(duration_name) and is_atom(end_name),
+      do: Constraint.interval(name, start_name, duration_name, end_name)
 
   def interval_var(%Variable{name: start_name}, name, duration, %Variable{name: end_name})
-      when is_atom(name) and is_integer(duration) do
-    %Constraint{type: :interval_fixed, data: {name, start_name, duration, end_name}}
-  end
+      when is_atom(name) and is_integer(duration),
+      do: Constraint.interval_fixed(name, start_name, duration, end_name)
 
   @doc "Adds an interval variable to a model."
   def interval_var(%__MODULE__{} = model, name, start_name, duration_name, end_name)
@@ -150,7 +143,7 @@ defmodule OrTools.CpSat do
         %Constraint{data: {name, _, _, _}} -> name
       end)
 
-    %Constraint{type: :no_overlap, data: names}
+    Constraint.no_overlap(names)
   end
 
   @doc "Adds a no-overlap constraint to a model."
@@ -160,7 +153,7 @@ defmodule OrTools.CpSat do
 
   @doc "Creates a max-equality constraint: target = max(var_names)."
   def max_eq(target, var_names) when is_atom(target) and is_list(var_names) do
-    %Constraint{type: :max_eq, data: {target, resolve_var_names(var_names)}}
+    Constraint.max_eq(target, resolve_var_names(var_names))
   end
 
   def max_eq(%Variable{name: target_name}, var_names) when is_list(var_names) do
@@ -196,7 +189,7 @@ defmodule OrTools.CpSat do
       {terms, op, rhs} =
         OrTools.CpSat.__build_constraint__(unquote(lhs_ast), unquote(rhs_ast), unquote(op))
 
-      %OrTools.CpSat.Constraint{type: :linear, data: {terms, op, rhs}}
+      OrTools.CpSat.Constraint.linear(terms, op, rhs)
     end
   end
 
@@ -220,11 +213,7 @@ defmodule OrTools.CpSat do
 
   @doc false
   def add_constraint(%__MODULE__{} = model, terms, op, rhs) do
-    Map.update!(
-      model,
-      :constraints,
-      &(&1 ++ [%Constraint{type: :linear, data: {terms, op, rhs}}])
-    )
+    add(model, Constraint.linear(terms, op, rhs))
   end
 
   @doc """
@@ -239,7 +228,7 @@ defmodule OrTools.CpSat do
   """
   def all_different(items) when is_list(items) do
     name_offsets = expand_all_different_items(items)
-    %Constraint{type: :all_different, data: name_offsets}
+    Constraint.all_different(name_offsets)
   end
 
   @doc "Adds an all-different constraint to a model."
@@ -255,54 +244,42 @@ defmodule OrTools.CpSat do
   end
 
   @doc "Constrains exactly one of the given boolean variables to be true."
-  def exactly_one(var_names) when is_list(var_names) do
-    %Constraint{type: :exactly_one, data: var_names}
-  end
+  def exactly_one(var_names) when is_list(var_names), do: Constraint.exactly_one(var_names)
 
   def exactly_one(%__MODULE__{} = model, var_names) when is_list(var_names) do
     add(model, exactly_one(var_names))
   end
 
   @doc "Constrains at most one of the given boolean variables to be true."
-  def at_most_one(var_names) when is_list(var_names) do
-    %Constraint{type: :at_most_one, data: var_names}
-  end
+  def at_most_one(var_names) when is_list(var_names), do: Constraint.at_most_one(var_names)
 
   def at_most_one(%__MODULE__{} = model, var_names) when is_list(var_names) do
     add(model, at_most_one(var_names))
   end
 
   @doc "Constrains at least one of the given boolean variables to be true."
-  def at_least_one(var_names) when is_list(var_names) do
-    %Constraint{type: :at_least_one, data: var_names}
-  end
+  def at_least_one(var_names) when is_list(var_names), do: Constraint.at_least_one(var_names)
 
   def at_least_one(%__MODULE__{} = model, var_names) when is_list(var_names) do
     add(model, at_least_one(var_names))
   end
 
   @doc "Constrains the boolean AND of the given variables to be true."
-  def bool_and(var_names) when is_list(var_names) do
-    %Constraint{type: :bool_and, data: var_names}
-  end
+  def bool_and(var_names) when is_list(var_names), do: Constraint.bool_and(var_names)
 
   def bool_and(%__MODULE__{} = model, var_names) when is_list(var_names) do
     add(model, bool_and(var_names))
   end
 
   @doc "Constrains the boolean OR of the given variables to be true."
-  def bool_or(var_names) when is_list(var_names) do
-    %Constraint{type: :bool_or, data: var_names}
-  end
+  def bool_or(var_names) when is_list(var_names), do: Constraint.bool_or(var_names)
 
   def bool_or(%__MODULE__{} = model, var_names) when is_list(var_names) do
     add(model, bool_or(var_names))
   end
 
   @doc "Constrains the boolean XOR of the given variables to be true."
-  def bool_xor(var_names) when is_list(var_names) do
-    %Constraint{type: :bool_xor, data: var_names}
-  end
+  def bool_xor(var_names) when is_list(var_names), do: Constraint.bool_xor(var_names)
 
   def bool_xor(%__MODULE__{} = model, var_names) when is_list(var_names) do
     add(model, bool_xor(var_names))
@@ -446,7 +423,7 @@ defmodule OrTools.CpSat do
           end) + abs(inner.const)
 
         model = add(model, int_var(abs_name, 0, max_bound))
-        model = add(model, %Constraint{type: :abs_eq, data: {abs_name, inner.terms, inner.const}})
+        model = add(model, Constraint.abs_eq(abs_name, inner.terms, inner.const))
 
         {model, [{abs_name, coeff} | acc]}
 
@@ -460,7 +437,7 @@ defmodule OrTools.CpSat do
 
         mul_name = :"__mul_#{:erlang.unique_integer([:positive])}"
         model = add(model, int_var(mul_name, Enum.min(products), Enum.max(products)))
-        model = add(model, %Constraint{type: :mul_eq, data: {mul_name, [left_var, right_var]}})
+        model = add(model, Constraint.mul_eq(mul_name, [left_var, right_var]))
 
         {model, [{mul_name, coeff} | acc]}
 
@@ -479,7 +456,7 @@ defmodule OrTools.CpSat do
             )
           )
 
-        model = add(model, %Constraint{type: :min_eq, data: {min_name, var_names}})
+        model = add(model, Constraint.min_eq(min_name, var_names))
 
         {model, [{min_name, coeff} | acc]}
 
@@ -498,7 +475,7 @@ defmodule OrTools.CpSat do
             )
           )
 
-        model = add(model, %Constraint{type: :max_eq, data: {max_name, var_names}})
+        model = add(model, Constraint.max_eq(max_name, var_names))
 
         {model, [{max_name, coeff} | acc]}
 
@@ -517,7 +494,7 @@ defmodule OrTools.CpSat do
 
         div_name = :"__div_#{:erlang.unique_integer([:positive])}"
         model = add(model, int_var(div_name, Enum.min(quotients), Enum.max(quotients)))
-        model = add(model, %Constraint{type: :div_eq, data: {div_name, dividend_var, divisor_var}})
+        model = add(model, Constraint.div_eq(div_name, dividend_var, divisor_var))
 
         {model, [{div_name, coeff} | acc]}
     end)

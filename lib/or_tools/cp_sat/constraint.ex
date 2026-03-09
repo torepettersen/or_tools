@@ -23,6 +23,29 @@ defmodule OrTools.CpSat.Constraint do
           | :no_overlap
 
   @doc false
+  def linear(terms, op, rhs), do: %__MODULE__{type: :linear, data: {terms, op, rhs}}
+  def interval(name, start_name, duration_name, end_name),
+    do: %__MODULE__{type: :interval, data: {name, start_name, duration_name, end_name}}
+
+  def interval_fixed(name, start_name, duration, end_name),
+    do: %__MODULE__{type: :interval_fixed, data: {name, start_name, duration, end_name}}
+
+  def no_overlap(interval_names), do: %__MODULE__{type: :no_overlap, data: interval_names}
+  def all_different(name_offsets), do: %__MODULE__{type: :all_different, data: name_offsets}
+  def exactly_one(var_names), do: %__MODULE__{type: :exactly_one, data: var_names}
+  def at_most_one(var_names), do: %__MODULE__{type: :at_most_one, data: var_names}
+  def at_least_one(var_names), do: %__MODULE__{type: :at_least_one, data: var_names}
+  def bool_and(var_names), do: %__MODULE__{type: :bool_and, data: var_names}
+  def bool_or(var_names), do: %__MODULE__{type: :bool_or, data: var_names}
+  def bool_xor(var_names), do: %__MODULE__{type: :bool_xor, data: var_names}
+  def max_eq(target, var_names), do: %__MODULE__{type: :max_eq, data: {target, var_names}}
+  def abs_eq(target, terms, const), do: %__MODULE__{type: :abs_eq, data: {target, terms, const}}
+  def mul_eq(target, var_names), do: %__MODULE__{type: :mul_eq, data: {target, var_names}}
+  def min_eq(target, var_names), do: %__MODULE__{type: :min_eq, data: {target, var_names}}
+  def div_eq(target, dividend, divisor),
+    do: %__MODULE__{type: :div_eq, data: {target, dividend, divisor}}
+
+  @doc false
   def to_tuple(%__MODULE__{type: :linear, data: {terms, op, rhs}}), do: {terms, op, rhs}
   # Internal constraints used by flatten_expr
   def to_tuple(%__MODULE__{type: :abs_eq, data: {target, terms, const}}),

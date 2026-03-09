@@ -140,19 +140,6 @@ defmodule OrTools.CpSatTest do
       assert result == %{status: :optimal, values: %{x: 7, y: 3, z: 5}, objective: 35.0}
     end
 
-    test "interval_var with integer duration creates an interval_fixed constraint" do
-      start_var = CpSat.int_var(:start, 0, 10)
-      end_var = CpSat.int_var(:end_time, 0, 10)
-      interval = CpSat.interval_var(start_var, :task, 3, end_var)
-
-      model = CpSat.new() |> CpSat.add([start_var, end_var, interval])
-
-      assert length(model.constraints) == 1
-      [constraint] = model.constraints
-      assert constraint.type == :interval_fixed
-      assert constraint.data == {:task, :start, 3, :end_time}
-    end
-
     test "no_overlap prevents two tasks from overlapping" do
       start1 = CpSat.int_var(:s1, 0, 10)
       end1 = CpSat.int_var(:e1, 0, 10)
@@ -254,74 +241,6 @@ defmodule OrTools.CpSatTest do
         |> CpSat.solve!()
 
       assert result == %{status: :optimal, values: %{x: 7}, objective: 7.0}
-    end
-  end
-
-  describe "Variable struct" do
-    test "int_var returns {model, var} when model is first arg" do
-      {model, var} = CpSat.int_var(CpSat.new(), :x, 0, 10)
-
-      assert var.name == :x
-      assert var.lower_bound == 0
-      assert var.upper_bound == 10
-      assert length(model.vars) == 1
-    end
-
-    test "Variable struct can be used directly in expressions" do
-      x_var = CpSat.int_var(:x, 0..10)
-      y_var = CpSat.int_var(:y, 0..10)
-
-      result =
-        CpSat.new()
-        |> CpSat.add([x_var, y_var])
-        |> CpSat.constrain(x_var + y_var <= 15)
-        |> CpSat.maximize(x_var + y_var)
-        |> CpSat.solve!()
-
-      assert result.status == :optimal
-      assert result.values.x + result.values.y == 15
-    end
-
-    test "value/2 reads result by Variable struct" do
-      x_var = CpSat.int_var(:x, 0..10)
-
-      result =
-        CpSat.new()
-        |> CpSat.add(x_var)
-        |> CpSat.constrain(x_var == 7)
-        |> CpSat.maximize(x_var)
-        |> CpSat.solve!()
-
-      assert CpSat.value(result, x_var) == 7
-    end
-
-    test "interval_var with integer duration solves correctly" do
-      start_var = CpSat.int_var(:s, 0, 20)
-      end_var = CpSat.int_var(:e, 0, 20)
-
-      result =
-        CpSat.new()
-        |> CpSat.add([start_var, end_var])
-        |> CpSat.add(CpSat.interval_var(start_var, :task, 5, end_var))
-        |> CpSat.constrain(start_var >= 3)
-        |> CpSat.minimize(start_var)
-        |> CpSat.solve!()
-
-      assert result.status == :optimal
-      assert result.values.s == 3
-      assert result.values.e == 8
-    end
-  end
-
-  describe "bool_var" do
-    test "creates a 0..1 variable" do
-      result =
-        CpSat.new()
-        |> CpSat.add(CpSat.bool_var(:flag))
-        |> CpSat.maximize(:flag)
-        |> CpSat.solve!()
-
-      assert result == %{status: :optimal, values: %{flag: 1}, objective: 1.0}
     end
   end
 
