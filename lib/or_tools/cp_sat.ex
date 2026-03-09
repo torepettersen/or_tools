@@ -24,6 +24,7 @@ defmodule OrTools.CpSat do
 
   alias OrTools.CpSat.Constraint
   alias OrTools.CpSat.Expr
+  alias OrTools.CpSat.Score
   alias OrTools.CpSat.Variable
 
   defmacro __using__(_opts) do
@@ -124,6 +125,18 @@ defmodule OrTools.CpSat do
 
   def add(%__MODULE__{} = model, items) when is_list(items) do
     Enum.reduce(items, model, &add(&2, &1))
+  end
+
+  def add(%__MODULE__{} = model, %Score{expr: expr}) do
+    {model, new_terms} = flatten_expr(model, expr)
+
+    case model.objective do
+      nil ->
+        Map.put(model, :objective, {nil, new_terms})
+
+      {sense, existing_terms} ->
+        Map.put(model, :objective, {sense, merge_terms(existing_terms ++ new_terms)})
+    end
   end
 
   @doc "Reads the solved value of a variable from a result by Variable struct."
@@ -316,7 +329,50 @@ defmodule OrTools.CpSat do
   """
   def expr, do: %Expr{}
 
-  @doc "Sets the objective to maximize. Does not validate variable names."
+  @doc """
+  Builds an objective score contribution without adding it to a model.
+
+  Returns a `Score` struct that can be collected into a model via `into: model`
+  or `CpSat.add(model, ...)`. Scores accumulate into the model's objective.
+  The direction is set separately with `CpSat.maximize/1` or `CpSat.minimize/1`.
+
+  ## Example
+
+      def contracted_fulfillment(model, employees, shifts) do
+        # ... add vars and constraints ...
+        CpSat.add(model, CpSat.score(1000 * :contracted_fulfillment))
+      end
+
+      def fairness(model, employees, shifts) do
+        for a <- employees, b <- employees, a.id < b.id, into: model do
+          CpSat.score(-abs(sum(employee_hours(a, shifts)) - sum(employee_hours(b, shifts))))
+        end
+      end
+
+      CpSat.new()
+      |> contracted_fulfillment(employees, shifts)
+      |> fairness(employees, shifts)
+      |> CpSat.maximize()
+      |> CpSat.solve!()
+  """
+  defmacro score(expr) do
+    terms_ast = quote_collect_terms(expr)
+    quote do: %OrTools.CpSat.Score{expr: unquote(terms_ast)}
+  end
+
+  defmacro score(model, expr) do
+    terms_ast = quote_collect_terms(expr)
+    quote do: OrTools.CpSat.add(unquote(model), %OrTools.CpSat.Score{expr: unquote(terms_ast)})
+  end
+
+  @doc """
+  Sets the objective to maximize.
+
+  With an expression, sets the objective immediately. Does not validate variable names.
+
+  Without an expression, sets the direction for scores accumulated via `CpSat.score/1`.
+  Can be called before or after scores are added.
+  """
   defmacro maximize(model, expr) do
     terms_ast = quote_collect_terms(expr)
 
@@ -325,12 +381,33 @@ defmodule OrTools.CpSat do
     end
   end
 
-  @doc "Sets the objective to minimize. Does not validate variable names."
+  def maximize(%__MODULE__{} = model) do
+    case model.objective do
+      nil -> Map.put(model, :objective, {:maximize, []})
+      {_sense, terms} -> Map.put(model, :objective, {:maximize, terms})
+    end
+  end
+
+  @doc """
+  Sets the objective to minimize.
+
+  With an expression, sets the objective immediately. Does not validate variable names.
+
+  Without an expression, sets the direction for scores accumulated via `CpSat.score/1`.
+  Can be called before or after scores are added.
+  """
   defmacro minimize(model, expr) do
     terms_ast = quote_collect_terms(expr)
 
     quote do
       OrTools.CpSat.__build_objective__(unquote(model), :minimize, unquote(terms_ast))
+    end
+  end
+
+  def minimize(%__MODULE__{} = model) do
+    case model.objective do
+      nil -> Map.put(model, :objective, {:minimize, []})
+      {_sense, terms} -> Map.put(model, :objective, {:minimize, terms})
     end
   end
 
@@ -745,6 +822,10 @@ defmodule OrTools.CpSat do
   end
 
   defp validate_objective(nil, _declared), do: :ok
+
+  defp validate_objective({nil, _terms}, _declared) do
+    {:error, "score expressions were added but CpSat.maximize/1 or CpSat.minimize/1 was never called"}
+  end
 
   defp validate_objective({_sense, terms}, declared) do
     check_terms(terms, declared)
