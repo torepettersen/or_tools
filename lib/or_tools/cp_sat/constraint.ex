@@ -121,6 +121,38 @@ defmodule OrTools.CpSat.Constraint do
     {Expr.merge_terms(combined.terms), op, -combined.const}
   end
 
+  @doc false
+  def build_constrain_ast(expr) do
+    {lhs_ast, op, rhs_ast} = parse_constraint_ast(expr)
+
+    quote do
+      {terms, op, rhs} =
+        OrTools.CpSat.Constraint.build_constraint_terms(
+          unquote(lhs_ast),
+          unquote(rhs_ast),
+          unquote(op)
+        )
+
+      OrTools.CpSat.Constraint.linear(terms, op, rhs)
+    end
+  end
+
+  @doc false
+  def build_constrain_ast(model, expr) do
+    {lhs_ast, op, rhs_ast} = parse_constraint_ast(expr)
+
+    quote do
+      {terms, op, rhs} =
+        OrTools.CpSat.Constraint.build_constraint_terms(
+          unquote(lhs_ast),
+          unquote(rhs_ast),
+          unquote(op)
+        )
+
+      OrTools.CpSat.add(unquote(model), OrTools.CpSat.Constraint.linear(terms, op, rhs))
+    end
+  end
+
   # --- Validation ---
 
   @doc "Validates a list of constraints against declared variable names."

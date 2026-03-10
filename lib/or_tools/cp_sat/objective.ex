@@ -34,6 +34,29 @@ defmodule OrTools.CpSat.Objective do
     check_terms(terms, declared)
   end
 
+  # --- Compile-time AST helpers (used by CpSat score/maximize/minimize macros) ---
+
+  @doc false
+  def build_score_ast(expr) do
+    terms_ast = Expr.quote_collect_terms(expr)
+    quote do: %OrTools.CpSat.Score{expr: unquote(terms_ast)}
+  end
+
+  @doc false
+  def build_score_ast(model, expr) do
+    terms_ast = Expr.quote_collect_terms(expr)
+    quote do: OrTools.CpSat.add(unquote(model), %OrTools.CpSat.Score{expr: unquote(terms_ast)})
+  end
+
+  @doc false
+  def build_objective_ast(model, sense, expr) do
+    terms_ast = Expr.quote_collect_terms(expr)
+
+    quote do
+      OrTools.CpSat.__build_objective__(unquote(model), unquote(sense), unquote(terms_ast))
+    end
+  end
+
   defp check_terms(terms, declared) do
     unknown =
       terms

@@ -72,9 +72,7 @@ defmodule OrTools.CpSat do
     add_vars(model, int_var(name, range))
   end
 
-  def int_var(name, lower_bound, upper_bound) when is_atom(name) do
-    Variable.int(name, lower_bound, upper_bound)
-  end
+  defdelegate int_var(name, lower_bound, upper_bound), to: Variable, as: :int
 
   def int_var(%__MODULE__{} = model, name, lower_bound, upper_bound) when is_atom(name) do
     add_vars(model, int_var(name, lower_bound, upper_bound))
@@ -89,10 +87,7 @@ defmodule OrTools.CpSat do
   end
 
   @doc "Creates an interval variable defined by start, duration, and end variables."
-  def interval_var(name, start_name, duration_name, end_name)
-      when is_atom(name) and is_atom(start_name) and is_atom(duration_name) and is_atom(end_name) do
-    Constraint.interval(name, start_name, duration_name, end_name)
-  end
+  defdelegate interval_var(name, start_name, duration_name, end_name), to: Constraint, as: :interval
 
   def interval_var(%Variable{name: start_name}, name, duration, %Variable{name: end_name})
       when is_atom(name) and is_integer(duration) do
@@ -170,14 +165,7 @@ defmodule OrTools.CpSat do
       end
   """
   defmacro constrain(expr) do
-    {lhs_ast, op, rhs_ast} = Constraint.parse_constraint_ast(expr)
-
-    quote do
-      {terms, op, rhs} =
-        OrTools.CpSat.Constraint.build_constraint_terms(unquote(lhs_ast), unquote(rhs_ast), unquote(op))
-
-      OrTools.CpSat.Constraint.linear(terms, op, rhs)
-    end
+    Constraint.build_constrain_ast(expr)
   end
 
   @doc """
@@ -188,14 +176,7 @@ defmodule OrTools.CpSat do
       CpSat.constrain(model, 2 * :x + 7 * :y <= 50)
   """
   defmacro constrain(model, expr) do
-    {lhs_ast, op, rhs_ast} = Constraint.parse_constraint_ast(expr)
-
-    quote do
-      {terms, op, rhs} =
-        OrTools.CpSat.Constraint.build_constraint_terms(unquote(lhs_ast), unquote(rhs_ast), unquote(op))
-
-      OrTools.CpSat.add(unquote(model), OrTools.CpSat.Constraint.linear(terms, op, rhs))
-    end
+    Constraint.build_constrain_ast(model, expr)
   end
 
   @doc """
@@ -313,13 +294,11 @@ defmodule OrTools.CpSat do
       |> CpSat.solve!()
   """
   defmacro score(expr) do
-    terms_ast = Expr.quote_collect_terms(expr)
-    quote do: %OrTools.CpSat.Score{expr: unquote(terms_ast)}
+    Objective.build_score_ast(expr)
   end
 
   defmacro score(model, expr) do
-    terms_ast = Expr.quote_collect_terms(expr)
-    quote do: OrTools.CpSat.add(unquote(model), %OrTools.CpSat.Score{expr: unquote(terms_ast)})
+    Objective.build_score_ast(model, expr)
   end
 
   @doc """
@@ -331,11 +310,7 @@ defmodule OrTools.CpSat do
   Can be called before or after scores are added.
   """
   defmacro maximize(model, expr) do
-    terms_ast = Expr.quote_collect_terms(expr)
-
-    quote do
-      OrTools.CpSat.__build_objective__(unquote(model), :maximize, unquote(terms_ast))
-    end
+    Objective.build_objective_ast(model, :maximize, expr)
   end
 
   def maximize(%__MODULE__{} = model) do
@@ -351,11 +326,7 @@ defmodule OrTools.CpSat do
   Can be called before or after scores are added.
   """
   defmacro minimize(model, expr) do
-    terms_ast = Expr.quote_collect_terms(expr)
-
-    quote do
-      OrTools.CpSat.__build_objective__(unquote(model), :minimize, unquote(terms_ast))
-    end
+    Objective.build_objective_ast(model, :minimize, expr)
   end
 
   def minimize(%__MODULE__{} = model) do
@@ -382,18 +353,14 @@ defmodule OrTools.CpSat do
   Supported params: `max_time_in_seconds`, `max_number_of_conflicts`, `num_workers`,
   `random_seed`, `log_search_progress`.
   """
-  def solve(%__MODULE__{} = model, opts \\ []) do
-    Solver.solve(model, opts)
-  end
+  defdelegate solve(model, opts \\ []), to: Solver
 
   @doc """
   Validates and solves the model. Returns the result or raises on error.
 
   See `solve/2` for options.
   """
-  def solve!(%__MODULE__{} = model, opts \\ []) do
-    Solver.solve!(model, opts)
-  end
+  defdelegate solve!(model, opts \\ []), to: Solver
 
   @doc """
   Enumerates all solutions. Returns `{:ok, result}` or `{:error, reason}`.
@@ -422,18 +389,14 @@ defmodule OrTools.CpSat do
           {variables, count + 1}
         end)
   """
-  def solve_all(%__MODULE__{} = model, opts \\ []) do
-    Solver.solve_all(model, opts)
-  end
+  defdelegate solve_all(model, opts \\ []), to: Solver
 
   @doc """
   Enumerates all solutions. Returns the result or raises on error.
 
   See `solve_all/2` for options.
   """
-  def solve_all!(%__MODULE__{} = model, opts \\ []) do
-    Solver.solve_all!(model, opts)
-  end
+  defdelegate solve_all!(model, opts \\ []), to: Solver
 
   # --- Validation ---
 
