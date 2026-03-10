@@ -24,7 +24,9 @@ defmodule OrTools.CpSat do
 
   alias OrTools.CpSat.Constraint
   alias OrTools.CpSat.Expr
+  alias OrTools.CpSat.Objective
   alias OrTools.CpSat.Score
+  alias OrTools.CpSat.Solver
   alias OrTools.CpSat.Variable
 
   defmacro __using__(_opts) do
@@ -40,60 +42,62 @@ defmodule OrTools.CpSat do
   @type op :: :<= | :>= | :== | :!= | :< | :>
 
   @doc "Creates a new empty model."
-  def new, do: %__MODULE__{}
+  def new do
+    %__MODULE__{}
+  end
+
+  # --- Variable creation ---
 
   @doc "Creates a boolean (0/1) variable with the given name."
-  def bool_var(name) when is_atom(name), do: Variable.bool(name)
+  defdelegate bool_var(name), to: Variable, as: :bool
 
+  @doc "Adds a boolean (0/1) variable to a model."
   def bool_var(%__MODULE__{} = model, name) when is_atom(name) do
-    var = bool_var(name)
-    {add(model, var), var}
+    add_vars(model, bool_var(name))
   end
 
   @doc "Creates boolean (0/1) variables for each name in the list."
-  def bool_vars(names) when is_list(names), do: Enum.map(names, &bool_var/1)
+  defdelegate bool_vars(names), to: Variable
 
   @doc "Adds boolean (0/1) variables for each name in the list to a model."
   def bool_vars(%__MODULE__{} = model, names) when is_list(names) do
-    vars = bool_vars(names)
-    {add(model, vars), vars}
+    add_vars(model, bool_vars(names))
   end
 
   @doc "Creates an integer variable with the given name and range."
-  def int_var(name, %Range{} = range) when is_atom(name), do: Variable.int(name, range)
-
-  def int_var(name, lower_bound, upper_bound)
-      when is_atom(name) and is_integer(lower_bound) and is_integer(upper_bound),
-      do: Variable.int(name, lower_bound, upper_bound)
+  defdelegate int_var(name, range), to: Variable, as: :int
 
   @doc "Adds an integer variable to a model."
   def int_var(%__MODULE__{} = model, name, %Range{} = range) when is_atom(name) do
-    var = int_var(name, range)
-    {add(model, var), var}
+    add_vars(model, int_var(name, range))
+  end
+
+  def int_var(name, lower_bound, upper_bound) when is_atom(name) do
+    Variable.int(name, lower_bound, upper_bound)
   end
 
   def int_var(%__MODULE__{} = model, name, lower_bound, upper_bound) when is_atom(name) do
-    var = int_var(name, lower_bound, upper_bound)
-    {add(model, var), var}
+    add_vars(model, int_var(name, lower_bound, upper_bound))
   end
 
   @doc "Creates integer variables with the given range for each name in the list."
-  def int_vars(names, %Range{} = range) when is_list(names), do: Enum.map(names, &int_var(&1, range))
+  defdelegate int_vars(names, range), to: Variable
 
   @doc "Adds integer variables with the given range for each name in the list to a model."
   def int_vars(%__MODULE__{} = model, names, %Range{} = range) when is_list(names) do
-    vars = int_vars(names, range)
-    {add(model, vars), vars}
+    add_vars(model, int_vars(names, range))
   end
 
   @doc "Creates an interval variable defined by start, duration, and end variables."
   def interval_var(name, start_name, duration_name, end_name)
-      when is_atom(name) and is_atom(start_name) and is_atom(duration_name) and is_atom(end_name),
-      do: Constraint.interval(name, start_name, duration_name, end_name)
+      when is_atom(name) and is_atom(start_name) and is_atom(duration_name) and is_atom(end_name) do
+    Constraint.interval(name, start_name, duration_name, end_name)
+  end
 
   def interval_var(%Variable{name: start_name}, name, duration, %Variable{name: end_name})
-      when is_atom(name) and is_integer(duration),
-      do: Constraint.interval_fixed(name, start_name, duration, end_name)
+      when is_atom(name) and is_integer(duration) do
+    Constraint.interval_fixed(name, start_name, duration, end_name)
+  end
 
   @doc "Adds an interval variable to a model."
   def interval_var(%__MODULE__{} = model, name, start_name, duration_name, end_name)
@@ -103,9 +107,10 @@ defmodule OrTools.CpSat do
 
   def interval_var(%__MODULE__{} = model, name, %Variable{} = start_var, duration, %Variable{} = end_var)
       when is_integer(duration) do
-    interval = interval_var(start_var, name, duration, end_var)
-    {add(model, interval), interval}
+    add_vars(model, interval_var(start_var, name, duration, end_var))
   end
+
+  # --- Model building ---
 
   @doc "Adds a variable or constraint (or list thereof) to a model without returning the item."
   def add(%__MODULE__{} = model, %Variable{} = var) do
@@ -122,29 +127,18 @@ defmodule OrTools.CpSat do
 
   def add(%__MODULE__{} = model, %Score{expr: expr}) do
     {model, new_terms} = flatten_expr(model, expr)
-
-    case model.objective do
-      nil ->
-        Map.put(model, :objective, {nil, new_terms})
-
-      {sense, existing_terms} ->
-        Map.put(model, :objective, {sense, Expr.merge_terms(existing_terms ++ new_terms)})
-    end
+    Map.put(model, :objective, Objective.merge_score(model.objective, new_terms))
   end
 
   @doc "Reads the solved value of a variable from a result by Variable struct."
-  def value(result, %Variable{name: name}), do: result.values[name]
+  def value(result, %Variable{name: name}) do
+    result.values[name]
+  end
+
+  # --- Constraints ---
 
   @doc "Creates a no-overlap constraint: no two interval variables overlap in time."
-  def no_overlap(intervals) when is_list(intervals) do
-    names =
-      Enum.map(intervals, fn
-        name when is_atom(name) -> name
-        %Constraint{data: {name, _, _, _}} -> name
-      end)
-
-    Constraint.no_overlap(names)
-  end
+  defdelegate no_overlap(intervals), to: Constraint
 
   @doc "Adds a no-overlap constraint to a model."
   def no_overlap(%__MODULE__{} = model, intervals) when is_list(intervals) do
@@ -153,7 +147,7 @@ defmodule OrTools.CpSat do
 
   @doc "Creates a max-equality constraint: target = max(var_names)."
   def max_eq(target, var_names) when is_atom(target) and is_list(var_names) do
-    Constraint.max_eq(target, resolve_var_names(var_names))
+    Constraint.max_eq(target, Variable.resolve_names(var_names))
   end
 
   def max_eq(%Variable{name: target_name}, var_names) when is_list(var_names) do
@@ -163,13 +157,6 @@ defmodule OrTools.CpSat do
   @doc "Adds a max-equality constraint to a model."
   def max_eq(%__MODULE__{} = model, target, var_names) do
     add(model, max_eq(target, var_names))
-  end
-
-  defp resolve_var_names(items) do
-    Enum.map(items, fn
-      %Variable{name: name} -> name
-      name when is_atom(name) -> name
-    end)
   end
 
   @doc """
@@ -183,11 +170,11 @@ defmodule OrTools.CpSat do
       end
   """
   defmacro constrain(expr) do
-    {lhs_ast, op, rhs_ast} = Expr.parse_constraint_ast(expr)
+    {lhs_ast, op, rhs_ast} = Constraint.parse_constraint_ast(expr)
 
     quote do
       {terms, op, rhs} =
-        OrTools.CpSat.Expr.build_constraint_terms(unquote(lhs_ast), unquote(rhs_ast), unquote(op))
+        OrTools.CpSat.Constraint.build_constraint_terms(unquote(lhs_ast), unquote(rhs_ast), unquote(op))
 
       OrTools.CpSat.Constraint.linear(terms, op, rhs)
     end
@@ -201,19 +188,14 @@ defmodule OrTools.CpSat do
       CpSat.constrain(model, 2 * :x + 7 * :y <= 50)
   """
   defmacro constrain(model, expr) do
-    {lhs_ast, op, rhs_ast} = Expr.parse_constraint_ast(expr)
+    {lhs_ast, op, rhs_ast} = Constraint.parse_constraint_ast(expr)
 
     quote do
       {terms, op, rhs} =
-        OrTools.CpSat.Expr.build_constraint_terms(unquote(lhs_ast), unquote(rhs_ast), unquote(op))
+        OrTools.CpSat.Constraint.build_constraint_terms(unquote(lhs_ast), unquote(rhs_ast), unquote(op))
 
-      OrTools.CpSat.add_constraint(unquote(model), terms, op, rhs)
+      OrTools.CpSat.add(unquote(model), OrTools.CpSat.Constraint.linear(terms, op, rhs))
     end
-  end
-
-  @doc false
-  def add_constraint(%__MODULE__{} = model, terms, op, rhs) do
-    add(model, Constraint.linear(terms, op, rhs))
   end
 
   @doc """
@@ -227,13 +209,7 @@ defmodule OrTools.CpSat do
   Returns a `Constraint` struct that can be collected into a model.
   """
   def all_different(items) when is_list(items) do
-    name_offsets =
-      Enum.map(items, fn
-        name when is_atom(name) -> {name, 0}
-        %Expr{terms: [{name, 1}], const: offset, special: []} -> {name, offset}
-      end)
-
-    Constraint.all_different(name_offsets)
+    Constraint.all_different(Enum.map(items, &Expr.to_name_offset/1))
   end
 
   @doc "Adds an all-different constraint to a model."
@@ -242,46 +218,48 @@ defmodule OrTools.CpSat do
   end
 
   @doc "Constrains exactly one of the given boolean variables to be true."
-  def exactly_one(var_names) when is_list(var_names), do: Constraint.exactly_one(var_names)
+  defdelegate exactly_one(var_names), to: Constraint
 
   def exactly_one(%__MODULE__{} = model, var_names) when is_list(var_names) do
     add(model, exactly_one(var_names))
   end
 
   @doc "Constrains at most one of the given boolean variables to be true."
-  def at_most_one(var_names) when is_list(var_names), do: Constraint.at_most_one(var_names)
+  defdelegate at_most_one(var_names), to: Constraint
 
   def at_most_one(%__MODULE__{} = model, var_names) when is_list(var_names) do
     add(model, at_most_one(var_names))
   end
 
   @doc "Constrains at least one of the given boolean variables to be true."
-  def at_least_one(var_names) when is_list(var_names), do: Constraint.at_least_one(var_names)
+  defdelegate at_least_one(var_names), to: Constraint
 
   def at_least_one(%__MODULE__{} = model, var_names) when is_list(var_names) do
     add(model, at_least_one(var_names))
   end
 
   @doc "Constrains the boolean AND of the given variables to be true."
-  def bool_and(var_names) when is_list(var_names), do: Constraint.bool_and(var_names)
+  defdelegate bool_and(var_names), to: Constraint
 
   def bool_and(%__MODULE__{} = model, var_names) when is_list(var_names) do
     add(model, bool_and(var_names))
   end
 
   @doc "Constrains the boolean OR of the given variables to be true."
-  def bool_or(var_names) when is_list(var_names), do: Constraint.bool_or(var_names)
+  defdelegate bool_or(var_names), to: Constraint
 
   def bool_or(%__MODULE__{} = model, var_names) when is_list(var_names) do
     add(model, bool_or(var_names))
   end
 
   @doc "Constrains the boolean XOR of the given variables to be true."
-  def bool_xor(var_names) when is_list(var_names), do: Constraint.bool_xor(var_names)
+  defdelegate bool_xor(var_names), to: Constraint
 
   def bool_xor(%__MODULE__{} = model, var_names) when is_list(var_names) do
     add(model, bool_xor(var_names))
   end
+
+  # --- Expressions ---
 
   @doc """
   Builds an `%Expr{}` from a mathematical expression.
@@ -302,7 +280,11 @@ defmodule OrTools.CpSat do
         score(model, emp)
       end
   """
-  def expr, do: %Expr{}
+  def expr do
+    %Expr{}
+  end
+
+  # --- Objective ---
 
   @doc """
   Builds an objective score contribution without adding it to a model.
@@ -357,10 +339,7 @@ defmodule OrTools.CpSat do
   end
 
   def maximize(%__MODULE__{} = model) do
-    case model.objective do
-      nil -> Map.put(model, :objective, {:maximize, []})
-      {_sense, terms} -> Map.put(model, :objective, {:maximize, terms})
-    end
+    Map.put(model, :objective, Objective.set_direction(model.objective, :maximize))
   end
 
   @doc """
@@ -380,36 +359,16 @@ defmodule OrTools.CpSat do
   end
 
   def minimize(%__MODULE__{} = model) do
-    case model.objective do
-      nil -> Map.put(model, :objective, {:minimize, []})
-      {_sense, terms} -> Map.put(model, :objective, {:minimize, terms})
-    end
-  end
-
-  @doc false
-  def set_objective(%__MODULE__{} = model, sense, terms) do
-    Map.put(model, :objective, {sense, terms})
+    Map.put(model, :objective, Objective.set_direction(model.objective, :minimize))
   end
 
   @doc false
   def __build_objective__(%__MODULE__{} = model, sense, %Expr{} = expr) do
     {model, linear_terms} = flatten_expr(model, expr)
-    set_objective(model, sense, Expr.merge_terms(linear_terms))
+    Map.put(model, :objective, {sense, Expr.merge_terms(linear_terms)})
   end
 
-  # Linearizes an %Expr{} into {model, [{atom, int}]} by delegating special-term
-  # linearization to Expr.linearize/2 and applying the resulting aux vars/constraints.
-  defp flatten_expr(model, %Expr{} = expr) do
-    var_bounds = Variable.bounds_map(model.vars)
-    {linear_terms, additions} = Expr.linearize(expr, var_bounds)
-
-    model =
-      Enum.reduce(Enum.reverse(additions), model, fn {var, constraint}, m ->
-        m |> add(var) |> add(constraint)
-      end)
-
-    {model, linear_terms}
-  end
+  # --- Solving ---
 
   @doc """
   Validates and solves the model. Returns `{:ok, result}` or `{:error, reason}`.
@@ -424,21 +383,7 @@ defmodule OrTools.CpSat do
   `random_seed`, `log_search_progress`.
   """
   def solve(%__MODULE__{} = model, opts \\ []) do
-    case validate(model) do
-      :ok ->
-        params = Keyword.get(opts, :params, [])
-
-        vars_tuples = Enum.map(model.vars, &Variable.to_tuple/1)
-        constraints_tuples = Enum.map(model.constraints, &Constraint.to_tuple/1)
-
-        {status, values, objective} =
-          OrTools.NIF.solve(vars_tuples, constraints_tuples, model.objective, params)
-
-        {:ok, %{status: status, values: Variable.filter_internal(values), objective: objective}}
-
-      {:error, _} = error ->
-        error
-    end
+    Solver.solve(model, opts)
   end
 
   @doc """
@@ -447,10 +392,7 @@ defmodule OrTools.CpSat do
   See `solve/2` for options.
   """
   def solve!(%__MODULE__{} = model, opts \\ []) do
-    case solve(model, opts) do
-      {:ok, result} -> result
-      {:error, message} -> raise ArgumentError, message
-    end
+    Solver.solve!(model, opts)
   end
 
   @doc """
@@ -481,77 +423,7 @@ defmodule OrTools.CpSat do
         end)
   """
   def solve_all(%__MODULE__{} = model, opts \\ []) do
-    on_solution = Keyword.get(opts, :on_solution)
-    init = Keyword.get(opts, :init, fn variables -> variables end)
-    params = Keyword.get(opts, :params, [])
-
-    handler_opts =
-      if on_solution do
-        var_names =
-          model.vars
-          |> Enum.map(fn %Variable{name: name} -> name end)
-          |> Enum.reject(&Variable.internal?/1)
-
-        {init.(var_names), on_solution}
-      end
-
-    do_solve_all(model, handler_opts, params)
-  end
-
-  defp do_solve_all(model, handler_opts, params) do
-    case validate(model) do
-      :ok ->
-        {callback_pid, ctrl} =
-          if handler_opts do
-            {init_state, on_solution} = handler_opts
-            ctrl = OrTools.NIF.new_solve_ctrl()
-            pid = spawn_solution_handler(model, init_state, on_solution, ctrl)
-            {pid, ctrl}
-          else
-            {nil, nil}
-          end
-
-        vars_tuples = Enum.map(model.vars, &Variable.to_tuple/1)
-        constraints_tuples = Enum.map(model.constraints, &Constraint.to_tuple/1)
-
-        {status, raw_solutions, metrics} =
-          OrTools.NIF.solve_all(
-            vars_tuples,
-            constraints_tuples,
-            model.objective,
-            callback_pid,
-            ctrl,
-            params
-          )
-
-        final_state =
-          if callback_pid do
-            send(callback_pid, {:done, self()})
-
-            receive do
-              {:handler_done, state} -> state
-            end
-          end
-
-        solutions =
-          Enum.map(raw_solutions, fn {values, objective} ->
-            %{values: Variable.filter_internal(values), objective: objective}
-          end)
-
-        result = %{status: status, solutions: solutions, metrics: metrics}
-
-        result =
-          if final_state != nil do
-            Map.put(result, :state, final_state)
-          else
-            result
-          end
-
-        {:ok, result}
-
-      {:error, _} = error ->
-        error
-    end
+    Solver.solve_all(model, opts)
   end
 
   @doc """
@@ -560,42 +432,10 @@ defmodule OrTools.CpSat do
   See `solve_all/2` for options.
   """
   def solve_all!(%__MODULE__{} = model, opts \\ []) do
-    case solve_all(model, opts) do
-      {:ok, result} -> result
-      {:error, message} -> raise ArgumentError, message
-    end
+    Solver.solve_all!(model, opts)
   end
 
-  defp spawn_solution_handler(model, init_state, callback, ctrl) do
-    internal_names = Variable.internal_names(model.vars)
-
-    spawn(fn ->
-      solution_handler_loop(callback, internal_names, init_state, ctrl)
-    end)
-  end
-
-  defp solution_handler_loop(callback, internal_names, state, ctrl) do
-    receive do
-      {:solution, _index, values, objective} ->
-        solution = %{values: Variable.reject_internal(values, internal_names), objective: objective}
-
-        case callback.(solution, state) do
-          {:halt, new_state} ->
-            OrTools.NIF.signal_solve(ctrl, :halt)
-
-            receive do
-              {:done, caller} -> send(caller, {:handler_done, new_state})
-            end
-
-          new_state ->
-            OrTools.NIF.signal_solve(ctrl, :continue)
-            solution_handler_loop(callback, internal_names, new_state, ctrl)
-        end
-
-      {:done, caller} ->
-        send(caller, {:handler_done, state})
-    end
-  end
+  # --- Validation ---
 
   @doc """
   Validates the model without solving. Returns `:ok` or `{:error, reason}`.
@@ -603,48 +443,30 @@ defmodule OrTools.CpSat do
   def validate(%__MODULE__{} = model) do
     declared = MapSet.new(model.vars, fn %Variable{name: name} -> name end)
 
-    with :ok <- validate_constraints(model.constraints, declared),
-         :ok <- validate_objective(model.objective, declared) do
+    with :ok <- Constraint.validate_all(model.constraints, declared),
+         :ok <- Objective.validate(model.objective, declared) do
       :ok
     end
   end
 
-  defp validate_constraints([], _declared), do: :ok
+  # --- Private helpers ---
 
-  defp validate_constraints([%Constraint{} = constraint | rest], declared) do
-    case Constraint.validate(constraint, declared) do
-      :ok -> validate_constraints(rest, declared)
-      error -> error
-    end
+  # Linearizes an %Expr{} into {model, [{atom, int}]} by applying aux vars/constraints.
+  defp flatten_expr(model, %Expr{} = expr) do
+    var_bounds = Variable.bounds_map(model.vars)
+    {linear_terms, additions} = Expr.linearize(expr, var_bounds)
+
+    model =
+      Enum.reduce(Enum.reverse(additions), model, fn {var, constraint}, m ->
+        m |> add(var) |> add(constraint)
+      end)
+
+    {model, linear_terms}
   end
 
-  defp validate_objective(nil, _declared), do: :ok
-
-  defp validate_objective({nil, _terms}, _declared) do
-    {:error, "score expressions were added but CpSat.maximize/1 or CpSat.minimize/1 was never called"}
-  end
-
-  defp validate_objective({_sense, terms}, declared) do
-    check_terms(terms, declared)
-  end
-
-  defp check_terms(terms, declared) do
-    unknown =
-      terms
-      |> Enum.map(&elem(&1, 0))
-      |> Enum.reject(&MapSet.member?(declared, &1))
-
-    case unknown do
-      [] ->
-        :ok
-
-      unknown ->
-        declared_list = declared |> MapSet.to_list() |> Enum.sort()
-
-        {:error,
-         "unknown variable(s) #{inspect(unknown)} in model. " <>
-           "Declared variables: #{inspect(declared_list)}"}
-    end
+  # Adds vars (or a single var) to a model and returns {updated_model, vars}.
+  defp add_vars(model, vars) do
+    {add(model, vars), vars}
   end
 
   defimpl Collectable do

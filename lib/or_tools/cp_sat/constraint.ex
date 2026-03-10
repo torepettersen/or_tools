@@ -2,6 +2,8 @@ defmodule OrTools.CpSat.Constraint do
   @moduledoc false
   # Internal struct representing a constraint. Exposed via CpSat functions.
 
+  alias OrTools.CpSat.Expr
+
   defstruct [:type, :data]
 
   @type t :: %__MODULE__{
@@ -28,29 +30,110 @@ defmodule OrTools.CpSat.Constraint do
           | :div_eq
 
   @doc false
-  def linear(terms, op, rhs), do: %__MODULE__{type: :linear, data: {terms, op, rhs}}
-  def interval(name, start_name, duration_name, end_name),
-    do: %__MODULE__{type: :interval, data: {name, start_name, duration_name, end_name}}
+  def linear(terms, op, rhs) do
+    %__MODULE__{type: :linear, data: {terms, op, rhs}}
+  end
 
-  def interval_fixed(name, start_name, duration, end_name),
-    do: %__MODULE__{type: :interval_fixed, data: {name, start_name, duration, end_name}}
+  def interval(name, start_name, duration_name, end_name) do
+    %__MODULE__{type: :interval, data: {name, start_name, duration_name, end_name}}
+  end
 
-  def no_overlap(interval_names), do: %__MODULE__{type: :no_overlap, data: interval_names}
-  def all_different(name_offsets), do: %__MODULE__{type: :all_different, data: name_offsets}
-  def exactly_one(var_names), do: %__MODULE__{type: :exactly_one, data: var_names}
-  def at_most_one(var_names), do: %__MODULE__{type: :at_most_one, data: var_names}
-  def at_least_one(var_names), do: %__MODULE__{type: :at_least_one, data: var_names}
-  def bool_and(var_names), do: %__MODULE__{type: :bool_and, data: var_names}
-  def bool_or(var_names), do: %__MODULE__{type: :bool_or, data: var_names}
-  def bool_xor(var_names), do: %__MODULE__{type: :bool_xor, data: var_names}
-  def max_eq(target, var_names), do: %__MODULE__{type: :max_eq, data: {target, var_names}}
-  def abs_eq(target, terms, const), do: %__MODULE__{type: :abs_eq, data: {target, terms, const}}
-  def mul_eq(target, var_names), do: %__MODULE__{type: :mul_eq, data: {target, var_names}}
-  def min_eq(target, var_names), do: %__MODULE__{type: :min_eq, data: {target, var_names}}
-  def div_eq(target, dividend, divisor),
-    do: %__MODULE__{type: :div_eq, data: {target, dividend, divisor}}
+  def interval_fixed(name, start_name, duration, end_name) do
+    %__MODULE__{type: :interval_fixed, data: {name, start_name, duration, end_name}}
+  end
+
+  def no_overlap(intervals) when is_list(intervals) do
+    %__MODULE__{type: :no_overlap, data: Enum.map(intervals, &interval_name/1)}
+  end
+
+  def all_different(name_offsets) do
+    %__MODULE__{type: :all_different, data: name_offsets}
+  end
+
+  def exactly_one(var_names) do
+    %__MODULE__{type: :exactly_one, data: var_names}
+  end
+
+  def at_most_one(var_names) do
+    %__MODULE__{type: :at_most_one, data: var_names}
+  end
+
+  def at_least_one(var_names) do
+    %__MODULE__{type: :at_least_one, data: var_names}
+  end
+
+  def bool_and(var_names) do
+    %__MODULE__{type: :bool_and, data: var_names}
+  end
+
+  def bool_or(var_names) do
+    %__MODULE__{type: :bool_or, data: var_names}
+  end
+
+  def bool_xor(var_names) do
+    %__MODULE__{type: :bool_xor, data: var_names}
+  end
+
+  def max_eq(target, var_names) do
+    %__MODULE__{type: :max_eq, data: {target, var_names}}
+  end
+
+  def abs_eq(target, terms, const) do
+    %__MODULE__{type: :abs_eq, data: {target, terms, const}}
+  end
+
+  def mul_eq(target, var_names) do
+    %__MODULE__{type: :mul_eq, data: {target, var_names}}
+  end
+
+  def min_eq(target, var_names) do
+    %__MODULE__{type: :min_eq, data: {target, var_names}}
+  end
+
+  def div_eq(target, dividend, divisor) do
+    %__MODULE__{type: :div_eq, data: {target, dividend, divisor}}
+  end
+
+  defp interval_name(name) when is_atom(name) do
+    name
+  end
+
+  defp interval_name(%__MODULE__{data: {name, _, _, _}}) do
+    name
+  end
+
+  # --- Compile-time AST helpers (used by CpSat constrain macros) ---
+
+  @doc false
+  def parse_constraint_ast({op, _, [lhs, rhs]}) when op in [:<=, :>=, :==, :!=, :<, :>] do
+    {Expr.quote_collect_terms(lhs), op, Expr.quote_collect_terms(rhs)}
+  end
+
+  @doc false
+  def build_constraint_terms(%Expr{} = lhs, %Expr{} = rhs, op) do
+    combined = Expr.subtract(lhs, rhs)
+
+    if combined.special != [] do
+      raise ArgumentError,
+            "constraints cannot contain nonlinear terms (abs, mul, div, min, max)"
+    end
+
+    {Expr.merge_terms(combined.terms), op, -combined.const}
+  end
 
   # --- Validation ---
+
+  @doc "Validates a list of constraints against declared variable names."
+  def validate_all([], _declared) do
+    :ok
+  end
+
+  def validate_all([%__MODULE__{} = constraint | rest], declared) do
+    case validate(constraint, declared) do
+      :ok -> validate_all(rest, declared)
+      error -> error
+    end
+  end
 
   @doc "Validates that all variable names referenced by this constraint are declared."
   def validate(%__MODULE__{type: :all_different, data: name_offsets}, declared) do
@@ -91,7 +174,9 @@ defmodule OrTools.CpSat.Constraint do
     check_var_names([start_name, end_name], declared)
   end
 
-  def validate(%__MODULE__{type: :no_overlap}, _declared), do: :ok
+  def validate(%__MODULE__{type: :no_overlap}, _declared) do
+    :ok
+  end
 
   def validate(%__MODULE__{type: :linear, data: {terms, _op, _rhs}}, declared) do
     check_terms(terms, declared)
@@ -118,30 +203,41 @@ defmodule OrTools.CpSat.Constraint do
   # --- Serialization ---
 
   @doc false
-  def to_tuple(%__MODULE__{type: :linear, data: {terms, op, rhs}}), do: {terms, op, rhs}
-  # Internal constraints used by flatten_expr
-  def to_tuple(%__MODULE__{type: :abs_eq, data: {target, terms, const}}),
-    do: {:abs_eq, target, terms, const}
+  def to_tuple(%__MODULE__{type: :linear, data: {terms, op, rhs}}) do
+    {terms, op, rhs}
+  end
 
-  def to_tuple(%__MODULE__{type: :mul_eq, data: {target, var_names}}),
-    do: {:mul_eq, target, var_names}
+  def to_tuple(%__MODULE__{type: :abs_eq, data: {target, terms, const}}) do
+    {:abs_eq, target, terms, const}
+  end
 
-  def to_tuple(%__MODULE__{type: :min_eq, data: {target, var_names}}),
-    do: {:min_eq, target, var_names}
+  def to_tuple(%__MODULE__{type: :mul_eq, data: {target, var_names}}) do
+    {:mul_eq, target, var_names}
+  end
 
-  def to_tuple(%__MODULE__{type: :max_eq, data: {target, var_names}}),
-    do: {:max_eq, target, var_names}
+  def to_tuple(%__MODULE__{type: :min_eq, data: {target, var_names}}) do
+    {:min_eq, target, var_names}
+  end
 
-  def to_tuple(%__MODULE__{type: :div_eq, data: {target, dividend, divisor}}),
-    do: {:div_eq, target, dividend, divisor}
+  def to_tuple(%__MODULE__{type: :max_eq, data: {target, var_names}}) do
+    {:max_eq, target, var_names}
+  end
 
-  def to_tuple(%__MODULE__{type: :interval, data: {name, start_name, duration_name, end_name}}),
-    do: {:interval, name, start_name, duration_name, end_name}
+  def to_tuple(%__MODULE__{type: :div_eq, data: {target, dividend, divisor}}) do
+    {:div_eq, target, dividend, divisor}
+  end
 
-  def to_tuple(%__MODULE__{type: :interval_fixed, data: {name, start_name, duration, end_name}}),
-    do: {:interval_fixed, name, start_name, duration, end_name}
+  def to_tuple(%__MODULE__{type: :interval, data: {name, start_name, duration_name, end_name}}) do
+    {:interval, name, start_name, duration_name, end_name}
+  end
 
-  def to_tuple(%__MODULE__{type: type, data: data}), do: {type, data}
+  def to_tuple(%__MODULE__{type: :interval_fixed, data: {name, start_name, duration, end_name}}) do
+    {:interval_fixed, name, start_name, duration, end_name}
+  end
+
+  def to_tuple(%__MODULE__{type: type, data: data}) do
+    {type, data}
+  end
 
   defimpl Inspect do
     import Inspect.Algebra
@@ -205,7 +301,9 @@ defmodule OrTools.CpSat.Constraint do
       "#{length(vars)} vars"
     end
 
-    defp format_terms([]), do: "0"
+    defp format_terms([]) do
+      "0"
+    end
 
     defp format_terms(terms) do
       terms

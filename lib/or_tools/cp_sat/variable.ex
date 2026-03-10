@@ -11,7 +11,9 @@ defmodule OrTools.CpSat.Variable do
         }
 
   @doc false
-  def bool(name) when is_atom(name), do: %__MODULE__{type: :bool, name: name}
+  def bool(name) when is_atom(name) do
+    %__MODULE__{type: :bool, name: name}
+  end
 
   @doc false
   def int(name, %Range{first: lower_bound, last: upper_bound}) when is_atom(name) do
@@ -23,16 +25,32 @@ defmodule OrTools.CpSat.Variable do
     %__MODULE__{type: :int, name: name, lower_bound: lower_bound, upper_bound: upper_bound}
   end
 
-  @doc false
-  def to_tuple(%__MODULE__{type: :bool, name: name}), do: {name, 0, 1}
+  @doc "Creates boolean (0/1) variables for each name in the list."
+  def bool_vars(names) when is_list(names) do
+    Enum.map(names, &bool/1)
+  end
 
-  def to_tuple(%__MODULE__{
-        type: :int,
-        name: name,
-        lower_bound: lower_bound,
-        upper_bound: upper_bound
-      }),
-      do: {name, lower_bound, upper_bound}
+  @doc "Creates integer variables with the given range for each name in the list."
+  def int_vars(names, %Range{} = range) when is_list(names) do
+    Enum.map(names, &int(&1, range))
+  end
+
+  @doc "Extracts atom names from a list of atoms or Variable structs."
+  def resolve_names(items) when is_list(items) do
+    Enum.map(items, fn
+      %__MODULE__{name: name} -> name
+      name when is_atom(name) -> name
+    end)
+  end
+
+  @doc false
+  def to_tuple(%__MODULE__{type: :bool, name: name}) do
+    {name, 0, 1}
+  end
+
+  def to_tuple(%__MODULE__{type: :int, name: name, lower_bound: lower_bound, upper_bound: upper_bound}) do
+    {name, lower_bound, upper_bound}
+  end
 
   @doc "Builds a map of variable name => {lower_bound, upper_bound} for all vars."
   def bounds_map(vars) when is_list(vars) do

@@ -32,14 +32,29 @@ defmodule OrTools.CpSat.Expr do
           | {:max, [atom()], integer()}
 
   @doc false
-  def new, do: %__MODULE__{}
-  def new(%__MODULE__{} = expr), do: expr
-  def new(%Variable{name: name}), do: %__MODULE__{terms: [{name, 1}]}
-  def new(name) when is_atom(name), do: %__MODULE__{terms: [{name, 1}]}
-  def new(value) when is_integer(value), do: %__MODULE__{const: value}
+  def new do
+    %__MODULE__{}
+  end
 
-  def new({name, coeff}) when is_atom(name) and is_integer(coeff),
-    do: %__MODULE__{terms: [{name, coeff}]}
+  def new(%__MODULE__{} = expr) do
+    expr
+  end
+
+  def new(%Variable{name: name}) do
+    %__MODULE__{terms: [{name, 1}]}
+  end
+
+  def new(name) when is_atom(name) do
+    %__MODULE__{terms: [{name, 1}]}
+  end
+
+  def new(value) when is_integer(value) do
+    %__MODULE__{const: value}
+  end
+
+  def new({name, coeff}) when is_atom(name) and is_integer(coeff) do
+    %__MODULE__{terms: [{name, coeff}]}
+  end
 
   @doc false
   def add(%__MODULE__{} = a, %__MODULE__{} = b) do
@@ -56,7 +71,9 @@ defmodule OrTools.CpSat.Expr do
   end
 
   @doc false
-  def sum(%__MODULE__{} = expr), do: expr
+  def sum(%__MODULE__{} = expr) do
+    expr
+  end
 
   def sum(list) when is_list(list) do
     list
@@ -78,14 +95,25 @@ defmodule OrTools.CpSat.Expr do
     }
   end
 
-  defp scale_special({:abs, inner, coeff}, factor), do: {:abs, inner, coeff * factor}
-  defp scale_special({:mul, left, right, coeff}, factor), do: {:mul, left, right, coeff * factor}
+  defp scale_special({:abs, inner, coeff}, factor) do
+    {:abs, inner, coeff * factor}
+  end
 
-  defp scale_special({:div, dividend, divisor, coeff}, factor),
-    do: {:div, dividend, divisor, coeff * factor}
+  defp scale_special({:mul, left, right, coeff}, factor) do
+    {:mul, left, right, coeff * factor}
+  end
 
-  defp scale_special({:min, vars, coeff}, factor), do: {:min, vars, coeff * factor}
-  defp scale_special({:max, vars, coeff}, factor), do: {:max, vars, coeff * factor}
+  defp scale_special({:div, dividend, divisor, coeff}, factor) do
+    {:div, dividend, divisor, coeff * factor}
+  end
+
+  defp scale_special({:min, vars, coeff}, factor) do
+    {:min, vars, coeff * factor}
+  end
+
+  defp scale_special({:max, vars, coeff}, factor) do
+    {:max, vars, coeff * factor}
+  end
 
   # --- Linear term utilities ---
 
@@ -95,18 +123,6 @@ defmodule OrTools.CpSat.Expr do
     |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
     |> Enum.map(fn {var, coeffs} -> {var, Enum.sum(coeffs)} end)
     |> Enum.reject(fn {_, coeff} -> coeff == 0 end)
-  end
-
-  @doc false
-  def build_constraint_terms(%__MODULE__{} = lhs, %__MODULE__{} = rhs, op) do
-    combined = subtract(lhs, rhs)
-
-    if combined.special != [] do
-      raise ArgumentError,
-            "constraints cannot contain nonlinear terms (abs, mul, div, min, max)"
-    end
-
-    {merge_terms(combined.terms), op, -combined.const}
   end
 
   # --- Expression linearization ---
@@ -173,12 +189,16 @@ defmodule OrTools.CpSat.Expr do
     end)
   end
 
-  # --- Compile-time AST helpers (used by CpSat macros) ---
-
-  @doc false
-  def parse_constraint_ast({op, _, [lhs, rhs]}) when op in [:<=, :>=, :==, :!=, :<, :>] do
-    {quote_collect_terms(lhs), op, quote_collect_terms(rhs)}
+  @doc "Converts an atom or single-variable Expr to a {name, offset} pair for all_different."
+  def to_name_offset(name) when is_atom(name) do
+    {name, 0}
   end
+
+  def to_name_offset(%__MODULE__{terms: [{name, 1}], const: offset, special: []}) do
+    {name, offset}
+  end
+
+  # --- Compile-time AST helpers (used by CpSat macros) ---
 
   # Addition
   @doc false
