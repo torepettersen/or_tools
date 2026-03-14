@@ -137,7 +137,7 @@ defmodule OrTools.CpSat.ConstraintTest do
       result =
         CpSat.new()
         |> CpSat.add([start_var, end_var])
-        |> CpSat.add(CpSat.interval_var(start_var, :task, 3, end_var))
+        |> CpSat.add(CpSat.interval_var(:task, start_var, 3, end_var))
         |> CpSat.constrain(start_var >= 2)
         |> CpSat.minimize(start_var)
         |> CpSat.solve!()

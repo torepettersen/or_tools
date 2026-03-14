@@ -10,12 +10,14 @@ defmodule OrTools.CpSat.Solver do
       :ok ->
         params = Keyword.get(opts, :params, [])
         vars_tuples = Enum.map(model.vars, &Variable.to_tuple/1)
-        constraints_tuples = Enum.map(model.constraints, &Constraint.to_tuple/1)
+        constraints_tuples =
+          Enum.map(model.interval_vars, &Variable.to_tuple/1) ++
+            Enum.map(model.constraints, &Constraint.to_tuple/1)
 
         {status, values, objective} =
           OrTools.NIF.solve(vars_tuples, constraints_tuples, model.objective, params)
 
-        {:ok, %{status: status, values: Variable.filter_internal(values), objective: objective}}
+        {:ok, %{status: status, values: filter_internal(values), objective: objective}}
 
       {:error, _} = error ->
         error
@@ -39,7 +41,7 @@ defmodule OrTools.CpSat.Solver do
         var_names =
           model.vars
           |> Enum.map(fn %Variable{name: name} -> name end)
-          |> Enum.reject(&Variable.internal?/1)
+          |> Enum.reject(&internal?/1)
 
         {init.(var_names), on_solution}
       end
@@ -68,7 +70,9 @@ defmodule OrTools.CpSat.Solver do
           end
 
         vars_tuples = Enum.map(model.vars, &Variable.to_tuple/1)
-        constraints_tuples = Enum.map(model.constraints, &Constraint.to_tuple/1)
+        constraints_tuples =
+          Enum.map(model.interval_vars, &Variable.to_tuple/1) ++
+            Enum.map(model.constraints, &Constraint.to_tuple/1)
 
         {status, raw_solutions, metrics} =
           OrTools.NIF.solve_all(
@@ -91,7 +95,7 @@ defmodule OrTools.CpSat.Solver do
 
         solutions =
           Enum.map(raw_solutions, fn {values, objective} ->
-            %{values: Variable.filter_internal(values), objective: objective}
+            %{values: filter_internal(values), objective: objective}
           end)
 
         result = %{status: status, solutions: solutions, metrics: metrics}
@@ -110,8 +114,33 @@ defmodule OrTools.CpSat.Solver do
     end
   end
 
+  defp internal?(name) when is_atom(name) do
+    s = Atom.to_string(name)
+
+    String.starts_with?(s, "__abs_") or
+      String.starts_with?(s, "__mul_") or
+      String.starts_with?(s, "__div_") or
+      String.starts_with?(s, "__min_") or
+      String.starts_with?(s, "__max_")
+  end
+
+  defp internal_names(vars) when is_list(vars) do
+    vars
+    |> Enum.map(fn %Variable{name: name} -> name end)
+    |> Enum.filter(&internal?/1)
+    |> MapSet.new()
+  end
+
+  defp filter_internal(values) when is_map(values) do
+    Map.reject(values, fn {name, _} -> internal?(name) end)
+  end
+
+  defp reject_internal(values, internal_names) when is_map(values) do
+    Map.reject(values, fn {name, _} -> MapSet.member?(internal_names, name) end)
+  end
+
   defp spawn_solution_handler(model, init_state, callback, ctrl) do
-    internal_names = Variable.internal_names(model.vars)
+    internal_names = internal_names(model.vars)
 
     spawn(fn ->
       solution_handler_loop(callback, internal_names, init_state, ctrl)
@@ -121,7 +150,10 @@ defmodule OrTools.CpSat.Solver do
   defp solution_handler_loop(callback, internal_names, state, ctrl) do
     receive do
       {:solution, _index, values, objective} ->
-        solution = %{values: Variable.reject_internal(values, internal_names), objective: objective}
+        solution = %{
+          values: reject_internal(values, internal_names),
+          objective: objective
+        }
 
         case callback.(solution, state) do
           {:halt, new_state} ->

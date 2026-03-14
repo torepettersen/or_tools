@@ -3,6 +3,7 @@ defmodule OrTools.CpSat.Constraint do
   # Internal struct representing a constraint. Exposed via CpSat functions.
 
   alias OrTools.CpSat.Expr
+  alias OrTools.CpSat.Variable
 
   defstruct [:type, :data]
 
@@ -20,8 +21,6 @@ defmodule OrTools.CpSat.Constraint do
           | :bool_or
           | :bool_xor
           | :all_different
-          | :interval
-          | :interval_fixed
           | :no_overlap
           | :abs_eq
           | :mul_eq
@@ -32,14 +31,6 @@ defmodule OrTools.CpSat.Constraint do
   @doc false
   def linear(terms, op, rhs) do
     %__MODULE__{type: :linear, data: {terms, op, rhs}}
-  end
-
-  def interval(name, start_name, duration_name, end_name) do
-    %__MODULE__{type: :interval, data: {name, start_name, duration_name, end_name}}
-  end
-
-  def interval_fixed(name, start_name, duration, end_name) do
-    %__MODULE__{type: :interval_fixed, data: {name, start_name, duration, end_name}}
   end
 
   def no_overlap(intervals) when is_list(intervals) do
@@ -98,7 +89,7 @@ defmodule OrTools.CpSat.Constraint do
     name
   end
 
-  defp interval_name(%__MODULE__{data: {name, _, _, _}}) do
+  defp interval_name(%Variable{name: name}) do
     name
   end
 
@@ -192,20 +183,6 @@ defmodule OrTools.CpSat.Constraint do
     check_var_names([target, dividend, divisor], declared)
   end
 
-  def validate(
-        %__MODULE__{type: :interval, data: {_name, start_name, duration_name, end_name}},
-        declared
-      ) do
-    check_var_names([start_name, duration_name, end_name], declared)
-  end
-
-  def validate(
-        %__MODULE__{type: :interval_fixed, data: {_name, start_name, _duration, end_name}},
-        declared
-      ) do
-    check_var_names([start_name, end_name], declared)
-  end
-
   def validate(%__MODULE__{type: :no_overlap}, _declared) do
     :ok
   end
@@ -259,14 +236,6 @@ defmodule OrTools.CpSat.Constraint do
     {:div_eq, target, dividend, divisor}
   end
 
-  def to_tuple(%__MODULE__{type: :interval, data: {name, start_name, duration_name, end_name}}) do
-    {:interval, name, start_name, duration_name, end_name}
-  end
-
-  def to_tuple(%__MODULE__{type: :interval_fixed, data: {name, start_name, duration, end_name}}) do
-    {:interval_fixed, name, start_name, duration, end_name}
-  end
-
   def to_tuple(%__MODULE__{type: type, data: data}) do
     {type, data}
   end
@@ -306,14 +275,6 @@ defmodule OrTools.CpSat.Constraint do
     defp format_constraint(:all_different, name_offsets) do
       count = length(name_offsets)
       "all_different(#{count} items)"
-    end
-
-    defp format_constraint(:interval, {name, start_name, duration_name, end_name}) do
-      "interval #{name}(#{start_name}, #{duration_name}, #{end_name})"
-    end
-
-    defp format_constraint(:interval_fixed, {name, start_name, duration, end_name}) do
-      "interval #{name}(#{start_name}, fixed:#{duration}, #{end_name})"
     end
 
     defp format_constraint(:no_overlap, interval_names) do

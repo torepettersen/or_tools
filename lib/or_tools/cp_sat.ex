@@ -36,20 +36,18 @@ defmodule OrTools.CpSat do
     end
   end
 
-  defstruct vars: [], constraints: [], objective: nil
+  defstruct vars: [], interval_vars: [], constraints: [], objective: nil
 
   @type linear_expr :: [{atom(), integer()}]
   @type op :: :<= | :>= | :== | :!= | :< | :>
 
   @doc "Creates a new empty model."
-  def new do
-    %__MODULE__{}
-  end
+  def new, do: %__MODULE__{}
 
   # --- Variable creation ---
 
   @doc "Creates a boolean (0/1) variable with the given name."
-  defdelegate bool_var(name), to: Variable, as: :bool
+  defdelegate bool_var(name), to: Variable
 
   @doc "Adds a boolean (0/1) variable to a model."
   def bool_var(%__MODULE__{} = model, name) when is_atom(name) do
@@ -65,14 +63,14 @@ defmodule OrTools.CpSat do
   end
 
   @doc "Creates an integer variable with the given name and range."
-  defdelegate int_var(name, range), to: Variable, as: :int
+  defdelegate int_var(name, range), to: Variable
 
   @doc "Adds an integer variable to a model."
   def int_var(%__MODULE__{} = model, name, %Range{} = range) when is_atom(name) do
     add_vars(model, int_var(name, range))
   end
 
-  defdelegate int_var(name, lower_bound, upper_bound), to: Variable, as: :int
+  defdelegate int_var(name, lower_bound, upper_bound), to: Variable
 
   def int_var(%__MODULE__{} = model, name, lower_bound, upper_bound) when is_atom(name) do
     add_vars(model, int_var(name, lower_bound, upper_bound))
@@ -87,27 +85,20 @@ defmodule OrTools.CpSat do
   end
 
   @doc "Creates an interval variable defined by start, duration, and end variables."
-  defdelegate interval_var(name, start_name, duration_name, end_name), to: Constraint, as: :interval
-
-  def interval_var(%Variable{name: start_name}, name, duration, %Variable{name: end_name})
-      when is_atom(name) and is_integer(duration) do
-    Constraint.interval_fixed(name, start_name, duration, end_name)
-  end
+  defdelegate interval_var(name, start, duration, end_var), to: Variable
 
   @doc "Adds an interval variable to a model."
-  def interval_var(%__MODULE__{} = model, name, start_name, duration_name, end_name)
-      when is_atom(start_name) do
-    add(model, interval_var(name, start_name, duration_name, end_name))
-  end
-
-  def interval_var(%__MODULE__{} = model, name, %Variable{} = start_var, duration, %Variable{} = end_var)
-      when is_integer(duration) do
-    add_vars(model, interval_var(start_var, name, duration, end_var))
+  def interval_var(%__MODULE__{} = model, name, start_name, duration, end_name) do
+    add_vars(model, interval_var(name, start_name, duration, end_name))
   end
 
   # --- Model building ---
 
   @doc "Adds a variable or constraint (or list thereof) to a model without returning the item."
+  def add(%__MODULE__{} = model, %Variable{type: :interval} = var) do
+    Map.update!(model, :interval_vars, &(&1 ++ [var]))
+  end
+
   def add(%__MODULE__{} = model, %Variable{} = var) do
     Map.update!(model, :vars, &(&1 ++ [var]))
   end
@@ -406,7 +397,8 @@ defmodule OrTools.CpSat do
   def validate(%__MODULE__{} = model) do
     declared = MapSet.new(model.vars, fn %Variable{name: name} -> name end)
 
-    with :ok <- Constraint.validate_all(model.constraints, declared),
+    with :ok <- Variable.validate_all(model.interval_vars, declared),
+         :ok <- Constraint.validate_all(model.constraints, declared),
          :ok <- Objective.validate(model.objective, declared) do
       :ok
     end

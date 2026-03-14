@@ -62,7 +62,11 @@ defmodule OrTools.CpSatTest do
 
       model =
         CpSat.new()
-        |> CpSat.add([CpSat.int_var(:x, 0..10), CpSat.int_var(:y, 0..10), CpSat.int_var(:z, 0..10)])
+        |> CpSat.add([
+          CpSat.int_var(:x, 0..10),
+          CpSat.int_var(:y, 0..10),
+          CpSat.int_var(:z, 0..10)
+        ])
 
       model =
         for var <- vars, into: model do
@@ -128,7 +132,11 @@ defmodule OrTools.CpSatTest do
 
       result =
         CpSat.new()
-        |> CpSat.add([CpSat.int_var(:a, 0..10), CpSat.int_var(:b, 0..10), CpSat.int_var(:c, 0..10)])
+        |> CpSat.add([
+          CpSat.int_var(:a, 0..10),
+          CpSat.int_var(:b, 0..10),
+          CpSat.int_var(:c, 0..10)
+        ])
         |> CpSat.constrain(sum(vars) <= 20)
         |> CpSat.maximize(sum(vars))
         |> CpSat.solve!()
@@ -158,7 +166,11 @@ defmodule OrTools.CpSatTest do
 
       result =
         CpSat.new()
-        |> CpSat.add([CpSat.int_var(:a, 0..10), CpSat.int_var(:b, 0..10), CpSat.int_var(:c, 0..10)])
+        |> CpSat.add([
+          CpSat.int_var(:a, 0..10),
+          CpSat.int_var(:b, 0..10),
+          CpSat.int_var(:c, 0..10)
+        ])
         |> CpSat.constrain(sum(expressions) <= 30)
         |> CpSat.maximize(sum(expressions))
         |> CpSat.solve!()
@@ -173,7 +185,11 @@ defmodule OrTools.CpSatTest do
 
       result =
         CpSat.new()
-        |> CpSat.add([CpSat.int_var(:x, 0..10), CpSat.int_var(:y, 0..10), CpSat.int_var(:z, 0..10)])
+        |> CpSat.add([
+          CpSat.int_var(:x, 0..10),
+          CpSat.int_var(:y, 0..10),
+          CpSat.int_var(:z, 0..10)
+        ])
         |> CpSat.maximize(sum(reward) + sum(penalty))
         |> CpSat.solve!()
 
@@ -188,7 +204,11 @@ defmodule OrTools.CpSatTest do
 
       result =
         CpSat.new()
-        |> CpSat.add([CpSat.int_var(:x, 0..10), CpSat.int_var(:y, 0..10), CpSat.int_var(:z, 0..10)])
+        |> CpSat.add([
+          CpSat.int_var(:x, 0..10),
+          CpSat.int_var(:y, 0..10),
+          CpSat.int_var(:z, 0..10)
+        ])
         |> CpSat.maximize(terms)
         |> CpSat.solve!()
 
@@ -288,7 +308,11 @@ defmodule OrTools.CpSatTest do
     test "maximize the minimum (fairness)" do
       result =
         CpSat.new()
-        |> CpSat.add([CpSat.int_var(:x, 0..10), CpSat.int_var(:y, 0..10), CpSat.int_var(:z, 0..10)])
+        |> CpSat.add([
+          CpSat.int_var(:x, 0..10),
+          CpSat.int_var(:y, 0..10),
+          CpSat.int_var(:z, 0..10)
+        ])
         |> CpSat.constrain(:x + :y + :z == 15)
         |> CpSat.maximize(min([:x, :y, :z]))
         |> CpSat.solve!()
@@ -300,7 +324,11 @@ defmodule OrTools.CpSatTest do
     test "minimize the maximum (balance)" do
       result =
         CpSat.new()
-        |> CpSat.add([CpSat.int_var(:x, 0..10), CpSat.int_var(:y, 0..10), CpSat.int_var(:z, 0..10)])
+        |> CpSat.add([
+          CpSat.int_var(:x, 0..10),
+          CpSat.int_var(:y, 0..10),
+          CpSat.int_var(:z, 0..10)
+        ])
         |> CpSat.constrain(:x + :y + :z == 15)
         |> CpSat.minimize(max([:x, :y, :z]))
         |> CpSat.solve!()
@@ -633,6 +661,36 @@ defmodule OrTools.CpSatTest do
 
       assert message =~ "maximize"
       assert message =~ "minimize"
+    end
+  end
+
+  describe "Variable struct in model" do
+    test "can be used directly in expressions" do
+      x_var = CpSat.int_var(:x, 0..10)
+      y_var = CpSat.int_var(:y, 0..10)
+
+      result =
+        CpSat.new()
+        |> CpSat.add([x_var, y_var])
+        |> CpSat.constrain(x_var + y_var <= 15)
+        |> CpSat.maximize(x_var + y_var)
+        |> CpSat.solve!()
+
+      assert result.status == :optimal
+      assert result.values.x + result.values.y == 15
+    end
+
+    test "value/2 reads result by Variable struct" do
+      x_var = CpSat.int_var(:x, 0..10)
+
+      result =
+        CpSat.new()
+        |> CpSat.add(x_var)
+        |> CpSat.constrain(x_var == 7)
+        |> CpSat.maximize(x_var)
+        |> CpSat.solve!()
+
+      assert CpSat.value(result, x_var) == 7
     end
   end
 end

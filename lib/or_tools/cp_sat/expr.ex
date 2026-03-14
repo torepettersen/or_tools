@@ -142,7 +142,7 @@ defmodule OrTools.CpSat.Expr do
             max(abs(lb * c), abs(ub * c))
           end) + abs(inner.const)
 
-        var = Variable.int(abs_name, 0, max_bound)
+        var = Variable.int_var(abs_name, 0, max_bound)
         constraint = Constraint.abs_eq(abs_name, inner.terms, inner.const)
         {[{abs_name, coeff} | acc_terms], [{var, constraint} | additions]}
 
@@ -153,7 +153,7 @@ defmodule OrTools.CpSat.Expr do
         {rl, ru} = Map.get(var_bounds, right_var, {0, 0})
         products = for l <- [ll, lu], r <- [rl, ru], do: l * r
         mul_name = :"__mul_#{:erlang.unique_integer([:positive])}"
-        var = Variable.int(mul_name, Enum.min(products), Enum.max(products))
+        var = Variable.int_var(mul_name, Enum.min(products), Enum.max(products))
         constraint = Constraint.mul_eq(mul_name, [left_var, right_var])
         {[{mul_name, coeff} | acc_terms], [{var, constraint} | additions]}
 
@@ -162,7 +162,7 @@ defmodule OrTools.CpSat.Expr do
         min_name = :"__min_#{:erlang.unique_integer([:positive])}"
         lower = bounds |> Enum.min_by(&elem(&1, 0)) |> elem(0)
         upper = bounds |> Enum.min_by(&elem(&1, 1)) |> elem(1)
-        var = Variable.int(min_name, lower, upper)
+        var = Variable.int_var(min_name, lower, upper)
         constraint = Constraint.min_eq(min_name, var_names)
         {[{min_name, coeff} | acc_terms], [{var, constraint} | additions]}
 
@@ -171,7 +171,7 @@ defmodule OrTools.CpSat.Expr do
         max_name = :"__max_#{:erlang.unique_integer([:positive])}"
         lower = bounds |> Enum.max_by(&elem(&1, 0)) |> elem(0)
         upper = bounds |> Enum.max_by(&elem(&1, 1)) |> elem(1)
-        var = Variable.int(max_name, lower, upper)
+        var = Variable.int_var(max_name, lower, upper)
         constraint = Constraint.max_eq(max_name, var_names)
         {[{max_name, coeff} | acc_terms], [{var, constraint} | additions]}
 
@@ -183,7 +183,7 @@ defmodule OrTools.CpSat.Expr do
         {vl, vu} = Map.get(var_bounds, divisor_var, {1, 1})
         quotients = for n <- [dl, du], d <- [vl, vu], d != 0, do: Kernel.div(n, d)
         div_name = :"__div_#{:erlang.unique_integer([:positive])}"
-        var = Variable.int(div_name, Enum.min(quotients), Enum.max(quotients))
+        var = Variable.int_var(div_name, Enum.min(quotients), Enum.max(quotients))
         constraint = Constraint.div_eq(div_name, dividend_var, divisor_var)
         {[{div_name, coeff} | acc_terms], [{var, constraint} | additions]}
     end)

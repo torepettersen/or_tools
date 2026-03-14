@@ -27,7 +27,8 @@ defmodule OrTools.CpSat.Objective do
   end
 
   def validate({nil, _terms}, _declared) do
-    {:error, "score expressions were added but CpSat.maximize/1 or CpSat.minimize/1 was never called"}
+    {:error,
+     "score expressions were added but CpSat.maximize/1 or CpSat.minimize/1 was never called"}
   end
 
   def validate({_sense, terms}, declared) do
