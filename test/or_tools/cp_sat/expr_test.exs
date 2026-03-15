@@ -1,126 +1,249 @@
 defmodule OrTools.CpSat.ExprTest do
-  use ExUnit.Case
-  alias OrTools.CpSat.Expr
+  use ExUnit.Case, async: true
+  use OrTools.CpSat
 
-  describe "new" do
-    test "zero expression" do
-      assert %Expr{terms: [], const: 0, special: []} = Expr.new()
+  describe "expr" do
+    test "Enum.reduce with CpSat.expr() collects expressions at runtime" do
+      terms =
+        Enum.reduce([:x, :y, :z], CpSat.expr(), fn v, acc ->
+          CpSat.expr(acc + 3 * v)
+        end)
+
+      result =
+        CpSat.new()
+        |> CpSat.add(CpSat.int_vars([:x, :y, :z], 0..10))
+        |> CpSat.maximize(terms)
+        |> CpSat.solve!()
+
+      assert result == %{status: :optimal, values: %{x: 10, y: 10, z: 10}, objective: 90.0}
     end
 
-    test "from variable" do
-      assert %Expr{terms: [x: 1]} = Expr.new(:x)
-    end
+    test "for comprehension with into collects expressions" do
+      terms =
+        for v <- [:x, :y, :z], into: CpSat.expr() do
+          CpSat.expr(v)
+        end
 
-    test "from constant" do
-      assert %Expr{const: 42} = Expr.new(42)
-    end
+      result =
+        CpSat.new()
+        |> CpSat.add(CpSat.int_vars([:x, :y, :z], 0..10))
+        |> CpSat.maximize(terms)
+        |> CpSat.solve!()
 
-    test "from weighted variable" do
-      assert %Expr{terms: [{:x, 5}]} = Expr.new({:x, 5})
-    end
-
-    test "passthrough Expr" do
-      expr = Expr.new(:x)
-      assert Expr.new(expr) == expr
+      assert result == %{status: :optimal, values: %{x: 10, y: 10, z: 10}, objective: 30.0}
     end
   end
 
-  describe "arithmetic" do
-    test "add combines terms" do
-      a = %Expr{terms: [{:x, 2}], const: 1}
-      b = %Expr{terms: [{:y, 3}], const: 4}
-      result = Expr.add(a, b)
-      assert result.terms == [{:x, 2}, {:y, 3}]
-      assert result.const == 5
+  describe "sum" do
+    test "sum of atom list" do
+      vars = [:a, :b, :c]
+
+      result =
+        CpSat.new()
+        |> CpSat.add(CpSat.int_vars([:a, :b, :c], 0..10))
+        |> CpSat.constrain(sum(vars) <= 20)
+        |> CpSat.maximize(sum(vars))
+        |> CpSat.solve!()
+
+      assert result.status == :optimal
+      assert result.values[:a] + result.values[:b] + result.values[:c] == 20
+      assert result.objective == 20.0
     end
 
-    test "subtract negates and adds" do
-      a = %Expr{terms: [{:x, 2}], const: 10}
-      b = %Expr{terms: [{:y, 3}], const: 4}
-      result = Expr.subtract(a, b)
-      assert result.terms == [{:x, 2}, {:y, -3}]
-      assert result.const == 6
+    test "sum of weighted expressions" do
+      terms = [CpSat.expr(2 * :x), CpSat.expr(3 * :y)]
+
+      result =
+        CpSat.new()
+        |> CpSat.add(CpSat.int_vars([:x, :y], 0..10))
+        |> CpSat.constrain(sum(terms) <= 25)
+        |> CpSat.maximize(sum(terms))
+        |> CpSat.solve!()
+
+      assert result.status == :optimal
+      assert 2 * result.values[:x] + 3 * result.values[:y] == 25
+      assert result.objective == 25.0
     end
 
-    test "negate flips all signs" do
-      expr = %Expr{terms: [{:x, 2}, {:y, -3}], const: 5}
-      result = Expr.negate(expr)
-      assert result.terms == [{:x, -2}, {:y, 3}]
-      assert result.const == -5
+    test "sum of expr results can be added in maximize" do
+      reward = Enum.map([:x, :y], fn v -> CpSat.expr(2 * v) end)
+      penalty = [CpSat.expr(-1 * :z)]
+
+      result =
+        CpSat.new()
+        |> CpSat.add(CpSat.int_vars([:x, :y, :z], 0..10))
+        |> CpSat.maximize(sum(reward) + sum(penalty))
+        |> CpSat.solve!()
+
+      assert result == %{status: :optimal, values: %{x: 10, y: 10, z: 0}, objective: 40.0}
+    end
+  end
+
+  describe "abs" do
+    test "maximize absolute value selects negative extreme" do
+      result =
+        CpSat.new()
+        |> CpSat.add(CpSat.int_var(:x, -10..5))
+        |> CpSat.maximize(abs(:x))
+        |> CpSat.solve!()
+
+      assert result == %{status: :optimal, values: %{x: -10}, objective: 10.0}
     end
 
-    test "scale multiplies everything" do
-      expr = %Expr{terms: [{:x, 2}, {:y, 3}], const: 5}
-      result = Expr.scale(expr, 10)
-      assert result.terms == [{:x, 20}, {:y, 30}]
-      assert result.const == 50
+    test "maximize absolute value selects positive extreme" do
+      result =
+        CpSat.new()
+        |> CpSat.add(CpSat.int_var(:x, -5..10))
+        |> CpSat.maximize(abs(:x))
+        |> CpSat.solve!()
+
+      assert result == %{status: :optimal, values: %{x: 10}, objective: 10.0}
     end
 
-    test "scale applies to special terms" do
-      expr = %Expr{special: [{:abs, Expr.new(:x), 1}, {:abs, Expr.new(:y), 3}]}
-      result = Expr.scale(expr, 5)
-      assert [{:abs, _, 5}, {:abs, _, 15}] = result.special
+    test "expr builds abs terms for use in sum" do
+      deviation = CpSat.expr(abs(:x - 5))
+
+      result =
+        CpSat.new()
+        |> CpSat.add(CpSat.int_var(:x, 0..10))
+        |> CpSat.minimize(sum(deviation))
+        |> CpSat.solve!()
+
+      assert result == %{status: :optimal, values: %{x: 5}, objective: 0.0}
     end
 
-    test "add combines special terms" do
-      a = %Expr{special: [{:abs, Expr.new(:x), 1}]}
-      b = %Expr{special: [{:abs, Expr.new(:y), 1}]}
-      result = Expr.add(a, b)
-      assert length(result.special) == 2
+    test "hidden abs variables are not in result" do
+      result =
+        CpSat.new()
+        |> CpSat.add(CpSat.int_var(:x, 0..10))
+        |> CpSat.minimize(abs(:x - 3))
+        |> CpSat.solve!()
+
+      assert result == %{status: :optimal, values: %{x: 3}, objective: 0.0}
+    end
+
+    test "runtime coefficient with abs" do
+      penalty = 100
+
+      result =
+        CpSat.new()
+        |> CpSat.add(CpSat.int_var(:x, 0..10))
+        |> CpSat.maximize(:x - penalty * abs(:x - 5))
+        |> CpSat.solve!()
+
+      assert result == %{status: :optimal, values: %{x: 5}, objective: 5.0}
+    end
+  end
+
+  describe "mul" do
+    test "variable multiplication in objective" do
+      result =
+        CpSat.new()
+        |> CpSat.add(CpSat.int_vars([:x, :y], 0..10))
+        |> CpSat.maximize(:x * :y)
+        |> CpSat.solve!()
+
+      assert result == %{status: :optimal, values: %{x: 10, y: 10}, objective: 100.0}
+    end
+  end
+
+  describe "div" do
+    test "integer division in objective" do
+      result =
+        CpSat.new()
+        |> CpSat.add([CpSat.int_var(:x, 0..100), CpSat.int_var(:y, 1..10)])
+        |> CpSat.constrain(:x == 50)
+        |> CpSat.constrain(:y == 7)
+        |> CpSat.maximize(div(:x, :y))
+        |> CpSat.solve!()
+
+      assert result == %{status: :optimal, values: %{x: 50, y: 7}, objective: 7.0}
+    end
+  end
+
+  describe "min" do
+    test "maximize the minimum (fairness)" do
+      result =
+        CpSat.new()
+        |> CpSat.add(CpSat.int_vars([:x, :y, :z], 0..10))
+        |> CpSat.constrain(:x + :y + :z == 15)
+        |> CpSat.maximize(min([:x, :y, :z]))
+        |> CpSat.solve!()
+
+      assert result.status == :optimal
+      assert result.objective == 5.0
+    end
+
+    test "hidden variables are not in result" do
+      result =
+        CpSat.new()
+        |> CpSat.add(CpSat.int_vars([:x, :y], 0..10))
+        |> CpSat.maximize(min([:x, :y]))
+        |> CpSat.solve!()
+
+      assert Map.keys(result.values) |> Enum.sort() == [:x, :y]
+    end
+  end
+
+  describe "max" do
+    test "minimize the maximum (balance)" do
+      result =
+        CpSat.new()
+        |> CpSat.add(CpSat.int_vars([:x, :y, :z], 0..10))
+        |> CpSat.constrain(:x + :y + :z == 15)
+        |> CpSat.minimize(max([:x, :y, :z]))
+        |> CpSat.solve!()
+
+      assert result.status == :optimal
+      assert result.objective == 5.0
+    end
+
+    test "hidden variables are not in result" do
+      result =
+        CpSat.new()
+        |> CpSat.add(CpSat.int_vars([:x, :y], 0..10))
+        |> CpSat.maximize(max([:x, :y]))
+        |> CpSat.solve!()
+
+      assert Map.keys(result.values) |> Enum.sort() == [:x, :y]
     end
   end
 
   describe "inspect" do
     test "simple variable" do
-      assert inspect(Expr.new(:x)) == "#Expr<x>"
+      assert inspect(CpSat.expr(:x)) == "#Expr<x>"
     end
 
     test "weighted variable" do
-      assert inspect(%Expr{terms: [{:x, 3}]}) == "#Expr<3*x>"
+      assert inspect(CpSat.expr(3 * :x)) == "#Expr<3*x>"
     end
 
     test "multiple terms" do
-      assert inspect(%Expr{terms: [{:x, 2}, {:y, 3}]}) == "#Expr<2*x + 3*y>"
+      assert inspect(CpSat.expr(2 * :x + 3 * :y)) == "#Expr<2*x + 3*y>"
     end
 
     test "negative terms" do
-      assert inspect(%Expr{terms: [{:x, 2}, {:y, -3}]}) == "#Expr<2*x - 3*y>"
+      assert inspect(CpSat.expr(2 * :x - 3 * :y)) == "#Expr<2*x - 3*y>"
     end
 
-    test "with constant" do
-      assert inspect(%Expr{terms: [{:x, 1}], const: 5}) == "#Expr<x + 5>"
+    test "with constant offset" do
+      assert inspect(CpSat.expr(:x + 5)) == "#Expr<x + 5>"
     end
 
     test "zero expression" do
-      assert inspect(Expr.new()) == "#Expr<0>"
+      assert inspect(CpSat.expr()) == "#Expr<0>"
     end
 
-    test "constant only" do
-      assert inspect(Expr.new(42)) == "#Expr<42>"
-    end
-  end
-
-  describe "collectable" do
-    test "for comprehension with into" do
-      result = for v <- [:x, :y, :z], into: %Expr{}, do: Expr.new(v)
-      assert result.terms == [{:x, 1}, {:y, 1}, {:z, 1}]
+    test "abs expression" do
+      assert inspect(CpSat.expr(abs(:x))) == "#Expr<abs(...)>"
     end
 
-    test "for comprehension with scaled terms" do
-      result =
-        for {v, c} <- [x: 2, y: 3], into: %Expr{} do
-          Expr.new({v, c})
-        end
-
-      assert result.terms == [{:x, 2}, {:y, 3}]
+    test "min expression" do
+      assert inspect(CpSat.expr(min([:x, :y]))) == "#Expr<min(x, y)>"
     end
 
-    test "collects Expr values" do
-      a = %Expr{terms: [{:x, 1}], const: 5}
-      b = %Expr{terms: [{:y, 2}], const: 3}
-      result = for e <- [a, b], into: %Expr{}, do: e
-      assert result.terms == [{:x, 1}, {:y, 2}]
-      assert result.const == 8
+    test "max expression" do
+      assert inspect(CpSat.expr(max([:x, :y]))) == "#Expr<max(x, y)>"
     end
   end
 end

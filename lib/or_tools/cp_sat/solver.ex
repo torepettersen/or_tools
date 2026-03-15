@@ -10,6 +10,7 @@ defmodule OrTools.CpSat.Solver do
       :ok ->
         params = Keyword.get(opts, :params, [])
         vars_tuples = Enum.map(model.vars, &Variable.to_tuple/1)
+
         constraints_tuples =
           Enum.map(model.interval_vars, &Variable.to_tuple/1) ++
             Enum.map(model.constraints, &Constraint.to_tuple/1)
@@ -70,6 +71,7 @@ defmodule OrTools.CpSat.Solver do
           end
 
         vars_tuples = Enum.map(model.vars, &Variable.to_tuple/1)
+
         constraints_tuples =
           Enum.map(model.interval_vars, &Variable.to_tuple/1) ++
             Enum.map(model.constraints, &Constraint.to_tuple/1)
@@ -94,9 +96,13 @@ defmodule OrTools.CpSat.Solver do
           end
 
         solutions =
-          Enum.map(raw_solutions, fn {values, objective} ->
-            %{values: filter_internal(values), objective: objective}
-          end)
+          if callback_pid do
+            nil
+          else
+            Enum.map(raw_solutions, fn {values, objective} ->
+              %{values: filter_internal(values), objective: objective}
+            end)
+          end
 
         result = %{status: status, solutions: solutions, metrics: metrics}
 

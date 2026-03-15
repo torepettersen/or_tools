@@ -127,4 +127,34 @@ defmodule OrTools.CpSat.VariableTest do
                "#Variable<interval task(s, d, e)>"
     end
   end
+
+  describe "Variable struct" do
+    test "can be used directly in expressions" do
+      x_var = CpSat.int_var(:x, 0..10)
+      y_var = CpSat.int_var(:y, 0..10)
+
+      result =
+        CpSat.new()
+        |> CpSat.add([x_var, y_var])
+        |> CpSat.constrain(x_var + y_var <= 15)
+        |> CpSat.maximize(x_var + y_var)
+        |> CpSat.solve!()
+
+      assert result.status == :optimal
+      assert result.values.x + result.values.y == 15
+    end
+
+    test "value/2 reads result by Variable struct" do
+      x_var = CpSat.int_var(:x, 0..10)
+
+      result =
+        CpSat.new()
+        |> CpSat.add(x_var)
+        |> CpSat.constrain(x_var == 7)
+        |> CpSat.maximize(x_var)
+        |> CpSat.solve!()
+
+      assert CpSat.value(result, x_var) == 7
+    end
+  end
 end

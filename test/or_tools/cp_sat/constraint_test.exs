@@ -62,6 +62,26 @@ defmodule OrTools.CpSat.ConstraintTest do
       assert result == %{status: :optimal, values: %{x: 7, y: 3, z: 5}, objective: 35.0}
     end
 
+    test "collected into model via for into:" do
+      vars = [:x, :y, :z]
+
+      model =
+        CpSat.new()
+        |> CpSat.add(CpSat.int_vars([:x, :y, :z], 0..10))
+
+      model =
+        for var <- vars, into: model do
+          CpSat.constrain(var <= 5)
+        end
+
+      result =
+        model
+        |> CpSat.maximize(:x + :y + :z)
+        |> CpSat.solve!()
+
+      assert result == %{status: :optimal, values: %{x: 5, y: 5, z: 5}, objective: 15.0}
+    end
+
     test "inspect" do
       assert inspect(CpSat.constrain(2 * :x + 3 * :y <= 10)) == "#Constraint<2*x + 3*y <= 10>"
     end
@@ -365,6 +385,50 @@ defmodule OrTools.CpSat.ConstraintTest do
 
     test "inspect" do
       assert inspect(Constraint.bool_xor([:a, :b])) == "#Constraint<bool_xor(:a, :b)>"
+    end
+  end
+
+  describe "runtime values" do
+    test "atom variable bound at runtime" do
+      x = :x
+      y = :y
+
+      result =
+        CpSat.new()
+        |> CpSat.add(CpSat.int_vars([:x, :y], 0..10))
+        |> CpSat.constrain(x + y <= 15)
+        |> CpSat.maximize(x + y)
+        |> CpSat.solve!()
+
+      assert result.status == :optimal
+      assert result.values[:x] + result.values[:y] == 15
+      assert result.objective == 15.0
+    end
+
+    test "runtime integer on the right side of constraint" do
+      limit = 7
+
+      result =
+        CpSat.new()
+        |> CpSat.add(CpSat.int_var(:x, 0..100))
+        |> CpSat.constrain(:x <= limit)
+        |> CpSat.maximize(:x)
+        |> CpSat.solve!()
+
+      assert result == %{status: :optimal, values: %{x: 7}, objective: 7.0}
+    end
+
+    test "runtime coefficient in multiplication" do
+      coeff = 3
+
+      result =
+        CpSat.new()
+        |> CpSat.add(CpSat.int_var(:x, 0..10))
+        |> CpSat.constrain(coeff * :x <= 21)
+        |> CpSat.maximize(:x)
+        |> CpSat.solve!()
+
+      assert result == %{status: :optimal, values: %{x: 7}, objective: 7.0}
     end
   end
 end
