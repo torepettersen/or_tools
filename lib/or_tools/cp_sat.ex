@@ -123,28 +123,6 @@ defmodule OrTools.CpSat do
 
   # --- Constraints ---
 
-  @doc "Creates a no-overlap constraint: no two interval variables overlap in time."
-  defdelegate no_overlap(intervals), to: Constraint
-
-  @doc "Adds a no-overlap constraint to a model."
-  def no_overlap(%__MODULE__{} = model, intervals) when is_list(intervals) do
-    add(model, no_overlap(intervals))
-  end
-
-  @doc "Creates a max-equality constraint: target = max(var_names)."
-  def max_eq(target, var_names) when is_atom(target) and is_list(var_names) do
-    Constraint.max_eq(target, Variable.resolve_names(var_names))
-  end
-
-  def max_eq(%Variable{name: target_name}, var_names) when is_list(var_names) do
-    max_eq(target_name, var_names)
-  end
-
-  @doc "Adds a max-equality constraint to a model."
-  def max_eq(%__MODULE__{} = model, target, var_names) do
-    add(model, max_eq(target, var_names))
-  end
-
   @doc """
   Builds a constraint without adding it to a model.
 
@@ -180,13 +158,59 @@ defmodule OrTools.CpSat do
 
   Returns a `Constraint` struct that can be collected into a model.
   """
-  def all_different(items) when is_list(items) do
-    Constraint.all_different(Enum.map(items, &Expr.to_name_offset/1))
-  end
+  defdelegate all_different(items), to: Constraint
 
   @doc "Adds an all-different constraint to a model."
   def all_different(%__MODULE__{} = model, items) when is_list(items) do
     add(model, all_different(items))
+  end
+
+  @doc "Creates a no-overlap constraint: no two interval variables overlap in time."
+  defdelegate no_overlap(intervals), to: Constraint
+
+  @doc "Adds a no-overlap constraint to a model."
+  def no_overlap(%__MODULE__{} = model, intervals) when is_list(intervals) do
+    add(model, no_overlap(intervals))
+  end
+
+  @doc "Creates a min-equality constraint: target = min(var_names)."
+  defdelegate min_eq(target, var_names), to: Constraint
+
+  @doc "Adds a min-equality constraint to a model."
+  def min_eq(%__MODULE__{} = model, target, var_names) do
+    add(model, min_eq(target, var_names))
+  end
+
+  @doc "Creates a max-equality constraint: target = max(var_names)."
+  defdelegate max_eq(target, var_names), to: Constraint
+
+  @doc "Adds a max-equality constraint to a model."
+  def max_eq(%__MODULE__{} = model, target, var_names) do
+    add(model, max_eq(target, var_names))
+  end
+
+  @doc "Creates a multiplication constraint: target = product of var_names."
+  defdelegate mul_eq(target, var_names), to: Constraint
+
+  @doc "Adds a multiplication constraint to a model."
+  def mul_eq(%__MODULE__{} = model, target, var_names) do
+    add(model, mul_eq(target, var_names))
+  end
+
+  @doc "Creates a division constraint: target = dividend div divisor."
+  defdelegate div_eq(target, dividend, divisor), to: Constraint
+
+  @doc "Adds a division constraint to a model."
+  def div_eq(%__MODULE__{} = model, target, dividend, divisor) do
+    add(model, div_eq(target, dividend, divisor))
+  end
+
+  @doc "Creates an absolute value constraint: target = abs(var)."
+  defdelegate abs_eq(target, var_name), to: Constraint
+
+  @doc "Adds an absolute value constraint to a model."
+  def abs_eq(%__MODULE__{} = model, target, var_name) do
+    add(model, abs_eq(target, var_name))
   end
 
   @doc "Constrains exactly one of the given boolean variables to be true."
@@ -252,9 +276,7 @@ defmodule OrTools.CpSat do
         score(model, emp)
       end
   """
-  def expr do
-    %Expr{}
-  end
+  def expr, do: %Expr{}
 
   # --- Objective ---
 

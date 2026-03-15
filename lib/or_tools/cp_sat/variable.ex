@@ -34,6 +34,16 @@ defmodule OrTools.CpSat.Variable do
     Enum.map(names, &int_var(&1, range))
   end
 
+  def interval_var(
+        name,
+        %__MODULE__{name: start_name},
+        %__MODULE__{name: duration_name},
+        %__MODULE__{name: end_name}
+      )
+      when is_atom(name) do
+    interval_var(name, start_name, duration_name, end_name)
+  end
+
   def interval_var(name, %__MODULE__{name: start_name}, duration, %__MODULE__{name: end_name})
       when is_atom(name) and is_integer(duration) do
     interval_var(name, start_name, duration, end_name)

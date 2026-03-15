@@ -14,31 +14,65 @@ defmodule OrTools.CpSat.Constraint do
 
   @type constraint_type ::
           :linear
+          | :all_different
+          | :no_overlap
+          | :min_eq
+          | :max_eq
+          | :mul_eq
+          | :div_eq
+          | :abs_eq
           | :exactly_one
           | :at_most_one
           | :at_least_one
           | :bool_and
           | :bool_or
           | :bool_xor
-          | :all_different
-          | :no_overlap
-          | :abs_eq
-          | :mul_eq
-          | :min_eq
-          | :max_eq
-          | :div_eq
+
+  # --- Constructors ---
 
   @doc false
   def linear(terms, op, rhs) do
     %__MODULE__{type: :linear, data: {terms, op, rhs}}
   end
 
+  def all_different(items) when is_list(items) do
+    %__MODULE__{type: :all_different, data: Enum.map(items, &Expr.to_name_offset/1)}
+  end
+
   def no_overlap(intervals) when is_list(intervals) do
     %__MODULE__{type: :no_overlap, data: Enum.map(intervals, &interval_name/1)}
   end
 
-  def all_different(name_offsets) do
-    %__MODULE__{type: :all_different, data: name_offsets}
+  def min_eq(target, var_names) when is_atom(target) and is_list(var_names) do
+    %__MODULE__{type: :min_eq, data: {target, Variable.resolve_names(var_names)}}
+  end
+
+  def min_eq(%Variable{name: target_name}, var_names) when is_list(var_names) do
+    min_eq(target_name, var_names)
+  end
+
+  def max_eq(target, var_names) when is_atom(target) and is_list(var_names) do
+    %__MODULE__{type: :max_eq, data: {target, Variable.resolve_names(var_names)}}
+  end
+
+  def max_eq(%Variable{name: target_name}, var_names) when is_list(var_names) do
+    max_eq(target_name, var_names)
+  end
+
+  def mul_eq(target, var_names) do
+    %__MODULE__{type: :mul_eq, data: {target, var_names}}
+  end
+
+  def div_eq(target, dividend, divisor) do
+    %__MODULE__{type: :div_eq, data: {target, dividend, divisor}}
+  end
+
+  def abs_eq(target, var_name) when is_atom(target) and is_atom(var_name) do
+    %__MODULE__{type: :abs_eq, data: {target, [{var_name, 1}], 0}}
+  end
+
+  def abs_eq(target, terms, const) do
+    %__MODULE__{type: :abs_eq, data: {target, terms, const}}
   end
 
   def exactly_one(var_names) do
@@ -65,33 +99,8 @@ defmodule OrTools.CpSat.Constraint do
     %__MODULE__{type: :bool_xor, data: var_names}
   end
 
-  def max_eq(target, var_names) do
-    %__MODULE__{type: :max_eq, data: {target, var_names}}
-  end
-
-  def abs_eq(target, terms, const) do
-    %__MODULE__{type: :abs_eq, data: {target, terms, const}}
-  end
-
-  def mul_eq(target, var_names) do
-    %__MODULE__{type: :mul_eq, data: {target, var_names}}
-  end
-
-  def min_eq(target, var_names) do
-    %__MODULE__{type: :min_eq, data: {target, var_names}}
-  end
-
-  def div_eq(target, dividend, divisor) do
-    %__MODULE__{type: :div_eq, data: {target, dividend, divisor}}
-  end
-
-  defp interval_name(name) when is_atom(name) do
-    name
-  end
-
-  defp interval_name(%Variable{name: name}) do
-    name
-  end
+  defp interval_name(name) when is_atom(name), do: name
+  defp interval_name(%Variable{name: name}), do: name
 
   # --- Compile-time AST helpers (used by CpSat constrain macros) ---
 
@@ -159,13 +168,25 @@ defmodule OrTools.CpSat.Constraint do
   end
 
   @doc "Validates that all variable names referenced by this constraint are declared."
+  def validate(%__MODULE__{type: :linear, data: {terms, _op, _rhs}}, declared) do
+    check_terms(terms, declared)
+  end
+
   def validate(%__MODULE__{type: :all_different, data: name_offsets}, declared) do
     Enum.map(name_offsets, &elem(&1, 0)) |> check_var_names(declared)
   end
 
-  def validate(%__MODULE__{type: type, data: var_names}, declared)
-      when type in [:exactly_one, :at_most_one, :at_least_one, :bool_and, :bool_or, :bool_xor] do
-    check_var_names(var_names, declared)
+  def validate(%__MODULE__{type: :no_overlap}, _declared) do
+    :ok
+  end
+
+  def validate(%__MODULE__{type: type, data: {target, var_names}}, declared)
+      when type in [:min_eq, :max_eq, :mul_eq] do
+    check_var_names([target | var_names], declared)
+  end
+
+  def validate(%__MODULE__{type: :div_eq, data: {target, dividend, divisor}}, declared) do
+    check_var_names([target, dividend, divisor], declared)
   end
 
   def validate(%__MODULE__{type: :abs_eq, data: {target, terms, _const}}, declared) do
@@ -174,21 +195,9 @@ defmodule OrTools.CpSat.Constraint do
          do: :ok
   end
 
-  def validate(%__MODULE__{type: type, data: {target, var_names}}, declared)
-      when type in [:mul_eq, :min_eq, :max_eq] do
-    check_var_names([target | var_names], declared)
-  end
-
-  def validate(%__MODULE__{type: :div_eq, data: {target, dividend, divisor}}, declared) do
-    check_var_names([target, dividend, divisor], declared)
-  end
-
-  def validate(%__MODULE__{type: :no_overlap}, _declared) do
-    :ok
-  end
-
-  def validate(%__MODULE__{type: :linear, data: {terms, _op, _rhs}}, declared) do
-    check_terms(terms, declared)
+  def validate(%__MODULE__{type: type, data: var_names}, declared)
+      when type in [:exactly_one, :at_most_one, :at_least_one, :bool_and, :bool_or, :bool_xor] do
+    check_var_names(var_names, declared)
   end
 
   defp check_terms(terms, declared) do
@@ -216,14 +225,6 @@ defmodule OrTools.CpSat.Constraint do
     {terms, op, rhs}
   end
 
-  def to_tuple(%__MODULE__{type: :abs_eq, data: {target, terms, const}}) do
-    {:abs_eq, target, terms, const}
-  end
-
-  def to_tuple(%__MODULE__{type: :mul_eq, data: {target, var_names}}) do
-    {:mul_eq, target, var_names}
-  end
-
   def to_tuple(%__MODULE__{type: :min_eq, data: {target, var_names}}) do
     {:min_eq, target, var_names}
   end
@@ -232,8 +233,16 @@ defmodule OrTools.CpSat.Constraint do
     {:max_eq, target, var_names}
   end
 
+  def to_tuple(%__MODULE__{type: :mul_eq, data: {target, var_names}}) do
+    {:mul_eq, target, var_names}
+  end
+
   def to_tuple(%__MODULE__{type: :div_eq, data: {target, dividend, divisor}}) do
     {:div_eq, target, dividend, divisor}
+  end
+
+  def to_tuple(%__MODULE__{type: :abs_eq, data: {target, terms, const}}) do
+    {:abs_eq, target, terms, const}
   end
 
   def to_tuple(%__MODULE__{type: type, data: data}) do
@@ -248,43 +257,48 @@ defmodule OrTools.CpSat.Constraint do
       concat(["#Constraint<", content, ">"])
     end
 
-    defp format_constraint(:exactly_one, vars) do
-      "exactly_one(#{format_vars(vars)})"
-    end
-
-    defp format_constraint(:at_most_one, vars) do
-      "at_most_one(#{format_vars(vars)})"
-    end
-
-    defp format_constraint(:at_least_one, vars) do
-      "at_least_one(#{format_vars(vars)})"
-    end
-
-    defp format_constraint(:bool_and, vars) do
-      "bool_and(#{format_vars(vars)})"
-    end
-
-    defp format_constraint(:bool_or, vars) do
-      "bool_or(#{format_vars(vars)})"
-    end
-
-    defp format_constraint(:bool_xor, vars) do
-      "bool_xor(#{format_vars(vars)})"
+    defp format_constraint(:linear, {terms, op, rhs}) do
+      "#{format_terms(terms)} #{op} #{rhs}"
     end
 
     defp format_constraint(:all_different, name_offsets) do
-      count = length(name_offsets)
-      "all_different(#{count} items)"
+      "all_different(#{name_offsets |> Enum.map(&elem(&1, 0)) |> format_vars()})"
     end
 
     defp format_constraint(:no_overlap, interval_names) do
       "no_overlap(#{format_vars(interval_names)})"
     end
 
-    defp format_constraint(:linear, {terms, op, rhs}) do
-      expr = format_terms(terms)
-      "#{expr} #{op} #{rhs}"
+    defp format_constraint(:min_eq, {target, var_names}) do
+      "#{target} = min(#{format_vars(var_names)})"
     end
+
+    defp format_constraint(:max_eq, {target, var_names}) do
+      "#{target} = max(#{format_vars(var_names)})"
+    end
+
+    defp format_constraint(:mul_eq, {target, var_names}) do
+      "#{target} = #{Enum.join(var_names, " * ")}"
+    end
+
+    defp format_constraint(:div_eq, {target, dividend, divisor}) do
+      "#{target} = #{dividend} div #{divisor}"
+    end
+
+    defp format_constraint(:abs_eq, {target, terms, 0}) do
+      "#{target} = abs(#{format_terms(terms)})"
+    end
+
+    defp format_constraint(:abs_eq, {target, terms, const}) do
+      "#{target} = abs(#{format_terms(terms)} + #{const})"
+    end
+
+    defp format_constraint(:exactly_one, vars), do: "exactly_one(#{format_vars(vars)})"
+    defp format_constraint(:at_most_one, vars), do: "at_most_one(#{format_vars(vars)})"
+    defp format_constraint(:at_least_one, vars), do: "at_least_one(#{format_vars(vars)})"
+    defp format_constraint(:bool_and, vars), do: "bool_and(#{format_vars(vars)})"
+    defp format_constraint(:bool_or, vars), do: "bool_or(#{format_vars(vars)})"
+    defp format_constraint(:bool_xor, vars), do: "bool_xor(#{format_vars(vars)})"
 
     defp format_vars(vars) when length(vars) <= 5 do
       Enum.map_join(vars, ", ", &inspect/1)
